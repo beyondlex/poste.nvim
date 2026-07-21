@@ -47,19 +47,19 @@ function M.setup_buffer_keymaps(buf)
 
   if nav then
     local k = km("http_source", "jump_next", "]]")
-    if k then vim.keymap.set("n", k, nav.jump_next, keymap_opts) end
+    if k and nav.jump_next then vim.keymap.set("n", k, nav.jump_next, keymap_opts) end
     k = km("http_source", "jump_prev", "[[")
-    if k then vim.keymap.set("n", k, nav.jump_prev, keymap_opts) end
+    if k and nav.jump_prev then vim.keymap.set("n", k, nav.jump_prev, keymap_opts) end
     k = km("http_source", "goto_definition", "gd")
-    if k then
+    if k and nav.goto_definition then
       vim.keymap.set("n", k, function()
         nav.goto_definition()
       end, keymap_opts)
     end
     k = km("http_source", "goto_references", "grr")
-    if k then vim.keymap.set("n", k, nav.goto_references, keymap_opts) end
+    if k and nav.goto_references then vim.keymap.set("n", k, nav.goto_references, keymap_opts) end
     k = km("http_source", "show_var_value", "K")
-    if k then vim.keymap.set("n", k, nav.show_var_value, keymap_opts) end
+    if k and nav.show_var_value then vim.keymap.set("n", k, nav.show_var_value, keymap_opts) end
   end
 
   local k = km("http_source", "quickfix_next", "]q")
