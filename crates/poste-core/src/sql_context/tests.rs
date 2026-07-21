@@ -193,6 +193,24 @@ fn test_detect_column_after_where() {
 }
 
 #[test]
+fn test_detect_column_where_semicolon_space() {
+    let result = detect_context("SELECT * FROM users WHERE ;", 25).unwrap();
+    assert_eq!(result.context_type, ContextType::Column);
+}
+
+#[test]
+fn test_detect_column_where_semicolon_on_semi() {
+    let result = detect_context("SELECT * FROM users WHERE ;", 26).unwrap();
+    assert_eq!(result.context_type, ContextType::Column);
+}
+
+#[test]
+fn test_detect_column_where_semicolon_after() {
+    let result = detect_context("SELECT * FROM users WHERE ;", 27).unwrap();
+    assert_eq!(result.context_type, ContextType::Column);
+}
+
+#[test]
 fn test_detect_on_column() {
     let result = detect_context("SELECT * FROM users u JOIN posts p ON ", 39).unwrap();
     assert_eq!(result.context_type, ContextType::Column);
