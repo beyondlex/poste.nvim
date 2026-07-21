@@ -1,0 +1,194 @@
+[
+  {
+    "name": "where eq returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE id = █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where gt returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE age > █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where like returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE name LIKE █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where is null returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE status IS █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where is not null returns column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE status IS NOT █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where not between returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE id NOT BETWEEN █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where between and returns column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE id BETWEEN 1 AND █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where not in returns column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE id NOT █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where and paren expression returns column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE (id = 1 AND name = 'a') AND █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where deeply parenthesized returns column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE ((a = 1) AND (b = 2)) AND █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where in values returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE id IN (1, 2, █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "where open paren expression returns column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE (█",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  }
+]

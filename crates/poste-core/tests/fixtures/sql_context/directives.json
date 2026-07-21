@@ -1,0 +1,44 @@
+[
+  {
+    "name": "connection directive returns keyword (safety net, Lua handles)",
+    "dialect": "generic",
+    "sql": "@connection █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "use returns database",
+    "dialect": "generic",
+    "sql": "USE █",
+    "expect": {
+      "ctx_type": "database",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "use with prefix returns database",
+    "dialect": "generic",
+    "sql": "USE mydb█",
+    "expect": {
+      "ctx_type": "database",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "mydb",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  }
+]

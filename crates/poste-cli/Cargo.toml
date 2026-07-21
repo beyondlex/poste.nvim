@@ -1,0 +1,23 @@
+[package]
+name = "poste-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for Poste: run HTTP/SQL/Redis requests from file buffers"
+keywords = ["http", "sql", "redis", "rest-client", "cli"]
+categories = ["command-line-utilities", "database"]
+
+[[bin]]
+name = "poste"
+path = "src/main.rs"
+
+[dependencies]
+poste-core.workspace = true
+poste-exec.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+regex.workspace = true

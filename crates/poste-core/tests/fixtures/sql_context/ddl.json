@@ -1,0 +1,148 @@
+[
+  {
+    "name": "create table returns table",
+    "dialect": "generic",
+    "sql": "CREATE TABLE █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "alter table returns table",
+    "dialect": "generic",
+    "sql": "ALTER TABLE █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "drop table returns table",
+    "dialect": "generic",
+    "sql": "DROP TABLE █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "truncate table returns table",
+    "dialect": "generic",
+    "sql": "TRUNCATE TABLE █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "alter table add column datatype returns datatype",
+    "dialect": "generic",
+    "sql": "ALTER TABLE users ADD COLUMN age █",
+    "expect": {
+      "ctx_type": "datatype",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "create index returns keyword",
+    "dialect": "generic",
+    "sql": "CREATE INDEX █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "drop index returns keyword",
+    "dialect": "generic",
+    "sql": "DROP INDEX █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "create view returns keyword",
+    "dialect": "generic",
+    "sql": "CREATE VIEW █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "alter table modify column returns column",
+    "dialect": "generic",
+    "sql": "ALTER TABLE posts MODIFY COLUMN █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "posts", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "alter table modify column after name returns datatype",
+    "dialect": "generic",
+    "sql": "ALTER TABLE posts MODIFY COLUMN age █",
+    "expect": {
+      "ctx_type": "datatype",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "posts", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  }
+]

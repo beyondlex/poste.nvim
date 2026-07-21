@@ -1,0 +1,18 @@
+[
+  {
+    "name": "mysql functions include CRC32 not STRING_AGG",
+    "dialect": "mysql",
+    "sql": "SELECT * FROM users WHERE █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  }
+]

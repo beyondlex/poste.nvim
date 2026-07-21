@@ -1,0 +1,82 @@
+[
+  {
+    "name": "after cte select where returns column",
+    "dialect": "generic",
+    "sql": "WITH cte AS (SELECT * FROM users) SELECT * FROM cte WHERE █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "cte", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "subquery does not leak tables to outer where",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders) AND █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "cursor after subquery in from",
+    "dialect": "generic",
+    "sql": "SELECT * FROM (SELECT * FROM items) AS sub WHERE █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "sub", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "cursor inside subquery exists has column context",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "cursor after nested subquery from",
+    "dialect": "generic",
+    "sql": "SELECT * FROM (SELECT * FROM (SELECT * FROM deep) AS mid) AS outer WHERE █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "outer", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  }
+]

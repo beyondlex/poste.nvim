@@ -1,0 +1,58 @@
+[
+  {
+    "name": "cursor inside string literal returns string",
+    "dialect": "generic",
+    "sql": "SELECT 'hello █'",
+    "expect": {
+      "ctx_type": "string",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": true,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "cursor in line comment returns comment",
+    "dialect": "generic",
+    "sql": "-- █",
+    "expect": {
+      "ctx_type": "comment",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": true
+    }
+  },
+  {
+    "name": "cursor in line comment after where returns comment",
+    "dialect": "generic",
+    "sql": "-- WHERE █",
+    "expect": {
+      "ctx_type": "comment",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": true
+    }
+  },
+  {
+    "name": "cursor in line comment after from returns comment",
+    "dialect": "generic",
+    "sql": "-- FROM █",
+    "expect": {
+      "ctx_type": "comment",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": true
+    }
+  }
+]

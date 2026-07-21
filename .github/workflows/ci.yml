@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main, refactoring, 'feat/**', 'fix/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (Rust ${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy  # Report warnings but don't fail (pre-existing issues)
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Test
+        run: cargo test --verbose
+
+      - name: Check for TODO/FIXME/HACK
+        run: |
+          ! grep -rn "TODO\|FIXME\|HACK" lua/ crates/ --include="*.lua" --include="*.rs" | grep -v ".md" | grep -v "target/" || exit 1
+
+  lua-check:
+    name: Lua lint (luacheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Lua
+        uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.1"
+
+      - name: Setup luarocks
+        uses: leafo/gh-actions-luarocks@v4
+
+      - name: Install luacheck
+        run: luarocks install luacheck
+
+      - name: Luacheck
+        run: luacheck lua/ tests/ --config .luacheckrc

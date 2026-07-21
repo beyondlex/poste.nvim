@@ -1,0 +1,30 @@
+[package]
+name = "poste-exec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Protocol execution engine for Poste: HTTP, Redis, PostgreSQL, MySQL, SQLite"
+keywords = ["http", "sql", "redis", "rest-client", "postgres"]
+categories = ["command-line-utilities", "database"]
+
+[dependencies]
+poste-core.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+regex.workspace = true
+
+# HTTP: curl subprocess (gives verbose trace for free)
+tempfile = "3"
+chrono = "0.4"
+dirs = "6"
+
+# Redis
+redis = { version = "0.27", features = ["tokio-comp"] }
+
+# SQL (PostgreSQL, MySQL, SQLite)
+sqlx.workspace = true
+rust_decimal.workspace = true

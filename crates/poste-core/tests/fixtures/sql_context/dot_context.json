@@ -1,0 +1,144 @@
+[
+  {
+    "name": "dot after bare table returns DotColumn",
+    "dialect": "generic",
+    "sql": "SELECT users.█",
+    "expect": {
+      "ctx_type": "dot_column",
+      "ctx_data": "users",
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "dot after alias returns DotColumn",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users u WHERE u.█",
+    "expect": {
+      "ctx_type": "dot_column",
+      "ctx_data": "u",
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": "u", "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "dot after schema qualified table returns DotColumn",
+    "dialect": "generic",
+    "sql": "SELECT auth.users.█",
+    "expect": {
+      "ctx_type": "dot_column",
+      "ctx_data": "users",
+      "ctx_schema": "auth",
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "schema qualified alias dot returns DotColumn",
+    "dialect": "generic",
+    "sql": "SELECT * FROM public.users u WHERE u.█",
+    "expect": {
+      "ctx_type": "dot_column",
+      "ctx_data": "u",
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": "u", "schema": "public" }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "schema qualified bare table dot returns DotColumn",
+    "dialect": "generic",
+    "sql": "SELECT * FROM auth.users WHERE users.█",
+    "expect": {
+      "ctx_type": "dot_column",
+      "ctx_data": "users",
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "schema": "auth", "alias": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "from schema dot returns SchemaTable",
+    "dialect": "generic",
+    "sql": "SELECT * FROM inventory.█",
+    "expect": {
+      "ctx_type": "schema_table",
+      "ctx_data": "inventory",
+      "ctx_schema": "inventory",
+      "prefix": "",
+      "tables": [
+        { "name": "inventory", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "from schema dot with prefix returns SchemaTable",
+    "dialect": "generic",
+    "sql": "SELECT * FROM inventory.us█",
+    "expect": {
+      "ctx_type": "schema_table",
+      "ctx_data": "inventory",
+      "ctx_schema": "inventory",
+      "prefix": "us",
+      "tables": [
+        { "name": "us", "alias": null, "schema": "inventory" }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "join schema dot returns SchemaTable",
+    "dialect": "generic",
+    "sql": "SELECT * FROM t JOIN inventory.█",
+    "expect": {
+      "ctx_type": "schema_table",
+      "ctx_data": "inventory",
+      "ctx_schema": "inventory",
+      "prefix": "",
+      "tables": [
+        { "name": "t", "alias": null, "schema": null },
+        { "name": "inventory", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "alias dot in select list",
+    "dialect": "generic",
+    "sql": "SELECT p.*, a.█ from posts p LEFT JOIN authors a on a.id = p.author_id;",
+    "expect": {
+      "ctx_type": "dot_column",
+      "ctx_data": "a",
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "posts", "alias": "p", "schema": null },
+        { "name": "authors", "alias": "a", "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  }
+]

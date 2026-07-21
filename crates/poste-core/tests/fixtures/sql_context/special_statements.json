@@ -1,0 +1,292 @@
+[
+  {
+    "name": "grant select on returns table",
+    "dialect": "generic",
+    "sql": "GRANT SELECT ON █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "revoke all on returns table",
+    "dialect": "generic",
+    "sql": "REVOKE ALL ON █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "copy returns table",
+    "dialect": "generic",
+    "sql": "COPY █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "copy with parens returns InsertColumn",
+    "dialect": "generic",
+    "sql": "COPY users (█",
+    "expect": {
+      "ctx_type": "insert_column",
+      "ctx_data": "users",
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "show tables returns table",
+    "dialect": "generic",
+    "sql": "SHOW TABLES █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "show databases returns database",
+    "dialect": "generic",
+    "sql": "SHOW DATABASES █",
+    "expect": {
+      "ctx_type": "database",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "show schemas returns database",
+    "dialect": "generic",
+    "sql": "SHOW SCHEMAS █",
+    "expect": {
+      "ctx_type": "database",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "show columns from returns table",
+    "dialect": "generic",
+    "sql": "SHOW COLUMNS FROM █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "show fields from returns table",
+    "dialect": "generic",
+    "sql": "SHOW FIELDS FROM █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "for update of returns table",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users FOR UPDATE OF █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null },
+        { "name": "OF", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "explain analyze returns table",
+    "dialect": "generic",
+    "sql": "EXPLAIN ANALYZE █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "lock table returns table",
+    "dialect": "generic",
+    "sql": "LOCK TABLE █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "vacuum returns table",
+    "dialect": "generic",
+    "sql": "VACUUM █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "analyze returns table",
+    "dialect": "generic",
+    "sql": "ANALYZE █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "begin returns keyword",
+    "dialect": "generic",
+    "sql": "BEGIN █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "commit returns keyword",
+    "dialect": "generic",
+    "sql": "COMMIT █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "rollback returns keyword",
+    "dialect": "generic",
+    "sql": "ROLLBACK █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "set statement returns keyword",
+    "dialect": "generic",
+    "sql": "SET statement_timeout = █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "lateral join inside subquery column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users u JOIN LATERAL (SELECT * FROM orders WHERE █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": "u", "schema": null },
+        { "name": "LATERAL", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "insert into select returns column",
+    "dialect": "generic",
+    "sql": "INSERT INTO users (id, name) SELECT █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  }
+]

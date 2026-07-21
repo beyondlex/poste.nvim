@@ -1,0 +1,273 @@
+[
+  {
+    "name": "empty string returns keyword",
+    "dialect": "generic",
+    "sql": "█",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "single char s returns keyword with prefix",
+    "dialect": "generic",
+    "sql": "s█",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "s",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "select star returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT * █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "select star f prefix returns keyword",
+    "dialect": "generic",
+    "sql": "select * f█",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "f",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "after from returns table",
+    "dialect": "generic",
+    "sql": "SELECT * FROM █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "after from with ident prefix returns table",
+    "dialect": "generic",
+    "sql": "SELECT * FROM a█",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "a",
+      "tables": [
+        { "name": "a", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "after table with trailing space returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT * FROM posts █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "posts", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "after where returns column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "after join returns table",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users JOIN █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "after column with trailing space returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users WHERE id █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "comma after column continues column context",
+    "dialect": "generic",
+    "sql": "SELECT id, name, █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "on clause returns column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users u JOIN posts p ON █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": "u", "schema": null },
+        { "name": "posts", "alias": "p", "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "select distinct returns column",
+    "dialect": "generic",
+    "sql": "SELECT DISTINCT █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "after order by returns column",
+    "dialect": "generic",
+    "sql": "SELECT * FROM users ORDER BY █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "after having returns column",
+    "dialect": "generic",
+    "sql": "SELECT id, COUNT(*) FROM users GROUP BY id HAVING █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "union returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT id FROM users UNION █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "select expr returns keyword",
+    "dialect": "generic",
+    "sql": "SELECT col █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "star comma continues column",
+    "dialect": "generic",
+    "sql": "SELECT id, *, █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  }
+]

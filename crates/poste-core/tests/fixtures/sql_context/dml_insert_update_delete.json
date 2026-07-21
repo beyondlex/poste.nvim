@@ -1,0 +1,161 @@
+[
+  {
+    "name": "insert into parens returns InsertColumn",
+    "dialect": "generic",
+    "sql": "INSERT INTO users (█",
+    "expect": {
+      "ctx_type": "insert_column",
+      "ctx_data": "users",
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "insert into empty parens returns InsertColumn",
+    "dialect": "generic",
+    "sql": "INSERT INTO posts ()█",
+    "expect": {
+      "ctx_type": "insert_column",
+      "ctx_data": "posts",
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "posts", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "update set returns column",
+    "dialect": "generic",
+    "sql": "UPDATE users SET █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "delete from returns table",
+    "dialect": "generic",
+    "sql": "DELETE FROM █",
+    "expect": {
+      "ctx_type": "table",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "update set comma continues column",
+    "dialect": "generic",
+    "sql": "UPDATE users SET name = 'x', █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "insert into values on conflict returns keyword",
+    "dialect": "generic",
+    "sql": "INSERT INTO users VALUES (1) ON CONFLICT DO NOTHING █",
+    "expect": {
+      "ctx_type": "keyword",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "delete returning returns column",
+    "dialect": "generic",
+    "sql": "DELETE FROM users WHERE id = 1 RETURNING █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "on conflict do update set returns column",
+    "dialect": "generic",
+    "sql": "INSERT INTO users (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null },
+        { "name": "SET", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "update set multiple columns with comma",
+    "dialect": "generic",
+    "sql": "UPDATE users SET name = 'x', age = █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "update set three columns",
+    "dialect": "generic",
+    "sql": "UPDATE posts SET author_id=1, slug='', █",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "",
+      "tables": [
+        { "name": "posts", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  }
+]

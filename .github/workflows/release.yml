@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: x86_64-linux
+            ext: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: aarch64-macos
+            ext: ""
+            extra_target: x86_64-apple-darwin
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: x86_64-windows
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Install extra target (macOS x86_64)
+        if: matrix.extra_target
+        run: rustup target add ${{ matrix.extra_target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p poste-cli
+
+      - name: Build (macOS x86_64)
+        if: matrix.extra_target
+        run: cargo build --release --target ${{ matrix.extra_target }} -p poste-cli
+
+      - name: Package (Unix)
+        if: matrix.ext == ''
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../poste-${{ matrix.name }}.tar.gz poste
+          cd ../../../..
+
+      - name: Package (macOS x86_64)
+        if: matrix.extra_target
+        run: |
+          cd target/${{ matrix.extra_target }}/release
+          tar czf ../../../poste-x86_64-macos.tar.gz poste
+          cd ../../../..
+
+      - name: Package (Windows)
+        if: matrix.ext == '.exe'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../poste-${{ matrix.name }}.zip poste.exe
+          cd ../../../..
+
+      - name: Checksum (Unix)
+        if: matrix.ext == ''
+        run: |
+          sha256sum poste-${{ matrix.name }}.tar.gz > poste-${{ matrix.name }}.tar.gz.sha256
+
+      - name: Checksum (macOS x86_64)
+        if: matrix.extra_target
+        run: |
+          sha256sum poste-x86_64-macos.tar.gz > poste-x86_64-macos.tar.gz.sha256
+
+      - name: Checksum (Windows)
+        if: matrix.ext == '.exe'
+        shell: bash
+        run: |
+          sha256sum poste-${{ matrix.name }}.zip > poste-${{ matrix.name }}.zip.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            poste-${{ matrix.name }}.tar.gz
+            poste-${{ matrix.name }}.zip
+            poste-${{ matrix.name }}.tar.gz.sha256
+            poste-${{ matrix.name }}.zip.sha256
+            poste-x86_64-macos.tar.gz
+            poste-x86_64-macos.tar.gz.sha256
+
+  release:
+    name: Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p assets
+          find dist -type f -exec cp {} assets/ \;
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true
