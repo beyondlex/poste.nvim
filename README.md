@@ -2,15 +2,15 @@
 
 **Send requests from files. Keyboard-first. Multi-protocol.**
 
-A Neovim plugin and Rust CLI for executing HTTP, Redis, SQL (PostgreSQL / MySQL / SQLite) requests from plain text files. Inspired by JetBrains HTTP Client, with focus on keyboard-driven workflows and dataset manipulation.
+A Neovim plugin and Rust CLI for executing HTTP, SQL (PostgreSQL / MySQL / SQLite) requests from plain text files. Inspired by JetBrains HTTP Client, with focus on keyboard-driven workflows and dataset manipulation.
 
 ## Features
 
-- **File-based requests** — Define requests in `.http`/`.rest`, `.sql`, `.redis` files
+- **File-based requests** — Define requests in `.http`/`.rest` and `.sql` files
 - **Environment variables** — JetBrains-style `env.json` with `{{var}}` substitution
 - **Named connections** — `connections.json` for database credentials; supports env var references
 - **Keyboard-first** — Execute at cursor, navigate results with Vim keys, never leave home row
-- **Multi-protocol** — HTTP, Redis, PostgreSQL, MySQL, SQLite
+- **Multi-protocol** — HTTP, PostgreSQL, MySQL, SQLite
 
 ## Repositories
 
@@ -19,7 +19,7 @@ Poste is split into three repositories:
 | Repo | Description |
 |------|-------------|
 | [poste.nvim](https://github.com/beyondlex/poste.nvim) | Shared infrastructure, Rust CLI, build system *(this repo)* |
-| [poste-http.nvim](https://github.com/beyondlex/poste-http.nvim) | HTTP + Redis protocol execution, Neovim UI |
+| [poste-http.nvim](https://github.com/beyondlex/poste-http.nvim) | HTTP protocol execution, Neovim UI |
 | [poste-sql.nvim](https://github.com/beyondlex/poste-sql.nvim) | SQL execution, dataset browser, schema introspection |
 
 ### Architecture
