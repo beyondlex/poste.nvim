@@ -3,14 +3,33 @@ local _ = require("poste.indicators")
 
 local M = {}
 
-local nav_ok, nav = pcall(require, "poste.http.nav")
+local function get_nav(buf)
+  local ft = vim.api.nvim_buf_get_option(buf, "filetype")
+  if ft == "poste_sql" or ft == "poste_sqlite" then
+    local ok, mod = pcall(require, "poste.sql.nav")
+    if ok then return mod end
+  end
+  local ok, mod = pcall(require, "poste.http.nav")
+  if ok then return mod end
+  return nil
+end
+
+local function get_run_request(buf)
+  local ft = vim.api.nvim_buf_get_option(buf, "filetype")
+  if ft == "poste_sql" or ft == "poste_sqlite" then
+    local ok, mod = pcall(require, "poste.sql.init")
+    if ok and mod.run_sql_request then return mod.run_sql_request end
+  end
+  local ok, mod = pcall(require, "poste.http.run")
+  if ok and mod.run_request then return mod.run_request end
+  return nil
+end
 
 function M.setup_buffer_keymaps(buf)
   local keymap_opts = { buffer = buf, noremap = true, silent = true }
   local km = state.get_keymap
-
-  local run_ok, run_mod = pcall(require, "poste.http.run")
-  local run_request = run_ok and run_mod.run_request or nil
+  local nav = get_nav(buf)
+  local run_request = get_run_request(buf)
 
   if run_request then
     local k = km("http_source", "run", "<CR>")
@@ -26,7 +45,7 @@ function M.setup_buffer_keymaps(buf)
     end
   end
 
-  if nav_ok then
+  if nav then
     local k = km("http_source", "jump_next", "]]")
     if k then vim.keymap.set("n", k, nav.jump_next, keymap_opts) end
     k = km("http_source", "jump_prev", "[[")
