@@ -111,6 +111,7 @@ M.config = {
       insert_row = "o",
       commit_edits = "<leader>w",
       export = "E",
+      help = "g?",
     },
     sql_table_ops = {
       select_all = "ma",
@@ -130,6 +131,7 @@ M.config = {
       close = "q",
       search_next = "n",
       search_prev = "N",
+      help = "g?",
     },
     sql_introspect = {
       close = "q",
