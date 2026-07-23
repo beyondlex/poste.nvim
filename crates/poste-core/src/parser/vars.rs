@@ -96,9 +96,8 @@ impl VarResolver {
     /// Caps at 20 iterations to prevent infinite loops from circular references.
     pub fn substitute(&self, input: &str) -> String {
         static VAR_RE: OnceLock<Regex> = OnceLock::new();
-        let re = VAR_RE.get_or_init(|| {
-            Regex::new(r"\{\{([^}]+)\}\}").expect("valid literal regex: {{var}}")
-        });
+        let re = VAR_RE
+            .get_or_init(|| Regex::new(r"\{\{([^}]+)\}\}").expect("valid literal regex: {{var}}"));
         let mut result = input.to_string();
         for _ in 0..20 {
             let next = re
@@ -205,8 +204,7 @@ mod tests {
 
     #[test]
     fn test_var_resolver_env_vars_fifth_priority() {
-        let r = VarResolver::new()
-            .with_env(HashMap::from([("key".into(), "env".into())]));
+        let r = VarResolver::new().with_env(HashMap::from([("key".into(), "env".into())]));
         assert_eq!(r.resolve("key"), Some("env".to_string()));
     }
 
@@ -235,18 +233,16 @@ mod tests {
 
     #[test]
     fn test_var_resolver_substitute_basic() {
-        let r = VarResolver::new()
-            .with_env(HashMap::from([("name".into(), "World".into())]));
+        let r = VarResolver::new().with_env(HashMap::from([("name".into(), "World".into())]));
         assert_eq!(r.substitute("Hello, {{name}}!"), "Hello, World!");
     }
 
     #[test]
     fn test_var_resolver_substitute_multiple() {
-        let r = VarResolver::new()
-            .with_env(HashMap::from([
-                ("first".into(), "Jane".into()),
-                ("last".into(), "Doe".into()),
-            ]));
+        let r = VarResolver::new().with_env(HashMap::from([
+            ("first".into(), "Jane".into()),
+            ("last".into(), "Doe".into()),
+        ]));
         assert_eq!(r.substitute("{{first}} {{last}}"), "Jane Doe");
     }
 
@@ -266,9 +262,17 @@ mod tests {
     fn test_var_resolver_substitute_magic_vars() {
         let r = VarResolver::new();
         let result = r.substitute("{{$timestamp}}");
-        assert!(!result.contains("{{"), "magic var should be resolved: {}", result);
+        assert!(
+            !result.contains("{{"),
+            "magic var should be resolved: {}",
+            result
+        );
         let result = r.substitute("{{$uuid}}");
-        assert!(!result.contains("{{"), "magic var should be resolved: {}", result);
+        assert!(
+            !result.contains("{{"),
+            "magic var should be resolved: {}",
+            result
+        );
     }
 
     #[test]
@@ -282,11 +286,10 @@ mod tests {
 
     #[test]
     fn test_var_resolver_substitute_iterative_resolution() {
-        let r = VarResolver::new()
-            .with_file_vars(HashMap::from([
-                ("base_url".into(), "http://{{host}}".into()),
-                ("host".into(), "example.com".into()),
-            ]));
+        let r = VarResolver::new().with_file_vars(HashMap::from([
+            ("base_url".into(), "http://{{host}}".into()),
+            ("host".into(), "example.com".into()),
+        ]));
         assert_eq!(r.substitute("{{base_url}}"), "http://example.com");
     }
 }

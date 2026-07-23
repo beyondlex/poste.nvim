@@ -44,9 +44,7 @@ impl Executor {
             });
 
         let (head_bytes, body_part) = match boundary {
-            Some((pos, sep_len)) => {
-                (&body_bytes[..pos], &body_bytes[pos + sep_len..])
-            }
+            Some((pos, sep_len)) => (&body_bytes[..pos], &body_bytes[pos + sep_len..]),
             None => {
                 // No blank line → headers only, no body
                 (body_bytes.as_ref(), &[][..])
@@ -91,9 +89,9 @@ impl Executor {
         // For multipart/form-data, convert LF → CRLF as required by the MIME
         // standard (RFC 2046).  The .http file uses Unix-style \n, but HTTP
         // boundary delimiters and part headers must use \r\n.
-        let is_multipart = req_headers.iter().any(|(k, v)| {
-            k.to_lowercase() == "content-type" && v.contains("multipart/form-data")
-        });
+        let is_multipart = req_headers
+            .iter()
+            .any(|(k, v)| k.to_lowercase() == "content-type" && v.contains("multipart/form-data"));
 
         let body_to_send: Vec<u8> = if is_form_urlencoded {
             body_part.iter().filter(|&&b| b != b'\n').copied().collect()
@@ -173,8 +171,7 @@ impl Executor {
             } else {
                 file_name
             };
-            let cache_dir = std::env::var("POSTE_CACHE_DIR")
-                .unwrap_or_else(|_| "/tmp".to_string());
+            let cache_dir = std::env::var("POSTE_CACHE_DIR").unwrap_or_else(|_| "/tmp".to_string());
             std::fs::create_dir_all(&cache_dir).ok();
             let tmp_path = mime::resolve_path_with_conflict(&cache_dir, &file_name);
             match std::fs::write(&tmp_path, &stdout) {
@@ -311,8 +308,7 @@ impl Executor {
             .map_err(|e| anyhow::anyhow!("Failed to execute curl: {}. Is curl installed?", e))?;
         Ok((output.stdout, output.stderr, output.status))
     }
-
-    }
+}
 
 /// Parsed response from curl output.
 struct CurlResponse {

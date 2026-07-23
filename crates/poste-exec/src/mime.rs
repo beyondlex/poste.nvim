@@ -68,9 +68,7 @@ pub fn mime_to_extension(content_type: &str) -> Option<&'static str> {
             Some(".pptx")
         }
         "application/msword" => Some(".doc"),
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
-            Some(".docx")
-        }
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some(".docx"),
         _ => None,
     }
 }
@@ -442,9 +440,7 @@ mod tests {
     #[test]
     fn test_mime_to_extension_office() {
         assert_eq!(
-            mime_to_extension(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
+            mime_to_extension("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             Some(".xlsx")
         );
         assert_eq!(mime_to_extension("application/msword"), Some(".doc"));

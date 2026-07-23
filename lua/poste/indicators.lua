@@ -40,7 +40,7 @@ end
 function M.clear_all(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
   if indicator_marks[buf] then
-    for line_0, sign_id in pairs(indicator_marks[buf]) do
+    for _, sign_id in pairs(indicator_marks[buf]) do
       pcall(vim.fn.sign_unplace, sign_group, { id = sign_id })
     end
     indicator_marks[buf] = {}

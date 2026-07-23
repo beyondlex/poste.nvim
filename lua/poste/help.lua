@@ -105,7 +105,6 @@ local DESCRIPTIONS = {
     search_next = "Next search match",
     search_prev = "Previous search match",
     help = "Show this help window",
-    help = "Show this help window",
   },
   sql_introspect = {
     close = "Close introspect window",

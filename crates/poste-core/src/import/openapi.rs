@@ -414,11 +414,7 @@ impl SpecImporter for OpenApiImporter {
                                     if let Some(s) = get_schema(&api, schema) {
                                         match content_type.as_str() {
                                             "application/x-www-form-urlencoded" => {
-                                                write_form_body(
-                                                    &mut content,
-                                                    s,
-                                                    &api,
-                                                );
+                                                write_form_body(&mut content, s, &api);
                                             }
                                             "application/json" | "application/xml" => {
                                                 if let Some(json) =
@@ -652,11 +648,7 @@ fn write_prompt_for_param(content: &mut String, api: &OpenAPI, param: &Reference
             if let Some(schema) = get_schema(api, schema_ref) {
                 if let Some(values) = extract_enum_values(schema) {
                     let sanitized = sanitize_var_name(&var_name);
-                    content.push_str(&format!(
-                        "<<{} [{}]\n",
-                        sanitized,
-                        values.join(", ")
-                    ));
+                    content.push_str(&format!("<<{} [{}]\n", sanitized, values.join(", ")));
                 }
             }
         }
@@ -786,11 +778,7 @@ fn generate_json_skeleton(schema: &Schema, api: &OpenAPI, depth: usize) -> Optio
 }
 
 /// Write form-urlencoded body from schema properties.
-fn write_form_body(
-    content: &mut String,
-    schema: &Schema,
-    _api: &OpenAPI,
-) {
+fn write_form_body(content: &mut String, schema: &Schema, _api: &OpenAPI) {
     let properties = match &schema.schema_kind {
         SchemaKind::Type(Type::Object(ObjectType { properties, .. })) => properties,
         SchemaKind::Any(any) => &any.properties,
@@ -1079,8 +1067,14 @@ mod tests {
         // Query params should be @var at file top, not in env_vars
         assert!(c.contains("@limit ="), "file should have @limit: {}", c);
         assert!(c.contains("@status ="), "file should have @status: {}", c);
-        assert!(!result.env_vars.contains_key("limit"), "limit not in env_vars");
-        assert!(!result.env_vars.contains_key("status"), "status not in env_vars");
+        assert!(
+            !result.env_vars.contains_key("limit"),
+            "limit not in env_vars"
+        );
+        assert!(
+            !result.env_vars.contains_key("status"),
+            "status not in env_vars"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1413,8 +1407,14 @@ mod tests {
         // Form body fields should be @var at file top, not in env_vars
         assert!(c.contains("@name ="), "file should have @name: {}", c);
         assert!(c.contains("@status ="), "file should have @status: {}", c);
-        assert!(!result.env_vars.contains_key("name"), "name not in env_vars");
-        assert!(!result.env_vars.contains_key("status"), "status not in env_vars");
+        assert!(
+            !result.env_vars.contains_key("name"),
+            "name not in env_vars"
+        );
+        assert!(
+            !result.env_vars.contains_key("status"),
+            "status not in env_vars"
+        );
     }
 
     // -----------------------------------------------------------------------

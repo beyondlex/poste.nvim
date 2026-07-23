@@ -161,9 +161,11 @@ M.response_index = nil           -- index into last_responses (request-scoped)
 M.last_assertion_results = nil   -- { tests, logs, total, passed, failed } (request-scoped)
 M.last_script_logs = nil         -- { "log line 1", "log line 2", ... } (request-scoped)
 M.last_request = nil             -- { buf, line } for re-run from response buffer
-M.pending_request = nil          -- { method, url, headers_str, body, env, timestamp, start_hires } — in-flight (request-scoped)
+M.pending_request = nil          -- { method, url, headers_str, body, env, timestamp, start_hires }
+                                 -- in-flight (request-scoped)
 M.current_view = "body"          -- "body" | "headers" | "verbose" | "assertions" | "script_logs"
-M._split_override = nil          -- "vertical" | "horizontal" — override split direction for next render (cleared on use)
+M._split_override = nil          -- "vertical" | "horizontal" — override split direction
+                                 -- for next render (cleared on use)
 
 -- Active protocol sessions (Phase 2b). Created at each run_* entry; discarded on next begin.
 -- Prefer reading/writing through session modules; these fields are the active references.

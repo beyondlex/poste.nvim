@@ -157,7 +157,10 @@ pub fn execute(args: ResolveArgs) -> Result<()> {
             println!("{}", resolved);
         }
         other => {
-            anyhow::bail!("Unknown format: {}. Use: value, content, verbose, or curl", other);
+            anyhow::bail!(
+                "Unknown format: {}. Use: value, content, verbose, or curl",
+                other
+            );
         }
     }
 
@@ -185,7 +188,9 @@ fn load_env_vars(search_dir: &std::path::Path, env_name: &str) -> HashMap<String
         let candidate = dir.join("env.json");
         if candidate.exists() {
             if let Ok(env_file) = poste_core::Environment::load(
-                candidate.to_str().expect("env.json path must be valid UTF-8"),
+                candidate
+                    .to_str()
+                    .expect("env.json path must be valid UTF-8"),
             ) {
                 if let Some(vars) = env_file.envs.get(env_name) {
                     return vars.clone();
@@ -505,7 +510,8 @@ POST {{host}}/login
 
     #[test]
     fn test_format_as_curl_post() {
-        let input = "POST http://example.com/api\nContent-Type: application/json\n\n{\"key\": \"value\"}\n";
+        let input =
+            "POST http://example.com/api\nContent-Type: application/json\n\n{\"key\": \"value\"}\n";
         let curl = format_as_curl(input);
         assert!(curl.contains("curl -X POST"));
         assert!(curl.contains("-d"));

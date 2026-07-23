@@ -56,7 +56,7 @@ local function pick_snacks(items, prompt, on_select)
         end
       end,
     },
-    function(item, idx)
+    function(item, _idx)
       if not resolved then
         resolved = true
         on_select(item and item.key or nil)
@@ -202,8 +202,8 @@ function M.select(items, prompt, on_select)
     return
   end
 
-  local ok, _ = pcall(require, "snacks.picker")
-  if ok then
+  local ok_picker, _ = pcall(require, "snacks.picker")
+  if ok_picker then
     pick_snacks(normalized, prompt, on_select)
     return
   end

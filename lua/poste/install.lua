@@ -3,7 +3,7 @@
 --- Called automatically from plugin/poste.lua on first load.
 local M = {}
 
-local REPO = "beyondlex/poste"
+local REPO = "beyondlex/poste.nvim"
 local BASE = vim.fn.stdpath("data") .. "/poste"
 local BIN_DIR = BASE .. "/bin"
 local VERSION_FILE = BASE .. "/.version"
