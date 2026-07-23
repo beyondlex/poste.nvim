@@ -149,9 +149,60 @@ impl SpecImporter for OpenApiImporter {
             let filename = format!("{}.http", Self::tag_to_filename(tag));
             let mut content = String::new();
 
-            // File-level base_url variable
-            content.push_str("@base_url = {{{{base_url}}}}\n");
-            content.push('\n');
+            // Collect file-level variable names (query, path, cookie, form body)
+            // These become @var definitions at the file top instead of env.json entries
+            let mut file_vars: Vec<(String, String)> = Vec::new();
+            for op in ops {
+                for param in &op.parameters {
+                    if let ReferenceOr::Item(p) = param {
+                        let name = match p {
+                            Parameter::Query { parameter_data, .. } => {
+                                sanitize_var_name(&parameter_data.name)
+                            }
+                            Parameter::Path { parameter_data, .. } => {
+                                sanitize_var_name(&parameter_data.name)
+                            }
+                            Parameter::Cookie { parameter_data, .. } => {
+                                sanitize_var_name(&parameter_data.name)
+                            }
+                            _ => continue,
+                        };
+                        if !file_vars.iter().any(|(n, _)| n == &name) {
+                            let default = match p {
+                                Parameter::Query { parameter_data, .. } => {
+                                    extract_default_from_param(parameter_data)
+                                }
+                                Parameter::Path { parameter_data, .. } => {
+                                    extract_default_from_param(parameter_data)
+                                }
+                                Parameter::Cookie { parameter_data, .. } => {
+                                    extract_default_from_param(parameter_data)
+                                }
+                                _ => String::new(),
+                            };
+                            file_vars.push((name, default));
+                        }
+                    }
+                }
+                // Collect form body field names
+                if let Some(body) = &op.request_body {
+                    collect_form_body_fields(&api, body, &mut file_vars);
+                }
+            }
+
+            // File-level base_url variable (resolved from env.json)
+            content.push_str(&format!("@base_url = {}\n", poste_var("base_url")));
+            // File-level non-header variables
+            for (var_name, default) in &file_vars {
+                if default.is_empty() {
+                    content.push_str(&format!("@{} = \n", var_name));
+                } else {
+                    content.push_str(&format!("@{} = {}\n", var_name, default));
+                }
+            }
+            if !file_vars.is_empty() {
+                content.push('\n');
+            }
 
             for op in ops {
                 // Separator + name
@@ -180,9 +231,6 @@ impl SpecImporter for OpenApiImporter {
                             &parameter_data.name,
                             poste_var(&var_name)
                         ));
-                        env_vars
-                            .entry(var_name)
-                            .or_insert_with(|| extract_default_from_param(parameter_data));
                     }
                 }
 
@@ -211,11 +259,8 @@ impl SpecImporter for OpenApiImporter {
                         ReferenceOr::Item(Parameter::Query { .. }) => {
                             // Already handled in request line above
                         }
-                        ReferenceOr::Item(Parameter::Path { parameter_data, .. }) => {
-                            let var_name = sanitize_var_name(&parameter_data.name);
-                            env_vars
-                                .entry(var_name)
-                                .or_insert_with(|| extract_default_from_param(parameter_data));
+                        ReferenceOr::Item(Parameter::Path { .. }) => {
+                            // Already collected as file-level @var
                         }
                         ReferenceOr::Item(Parameter::Cookie { parameter_data, .. }) => {
                             let var_name = sanitize_var_name(&parameter_data.name);
@@ -224,9 +269,6 @@ impl SpecImporter for OpenApiImporter {
                                 parameter_data.name,
                                 poste_var(&var_name)
                             ));
-                            env_vars
-                                .entry(var_name)
-                                .or_insert_with(|| extract_default_from_param(parameter_data));
                         }
                         ReferenceOr::Reference { reference } => {
                             warnings.push(format!("Skipping $ref parameter: {}", reference));
@@ -376,7 +418,6 @@ impl SpecImporter for OpenApiImporter {
                                                     &mut content,
                                                     s,
                                                     &api,
-                                                    &mut env_vars,
                                                 );
                                             }
                                             "application/json" | "application/xml" => {
@@ -749,7 +790,6 @@ fn write_form_body(
     content: &mut String,
     schema: &Schema,
     _api: &OpenAPI,
-    env_vars: &mut HashMap<String, String>,
 ) {
     let properties = match &schema.schema_kind {
         SchemaKind::Type(Type::Object(ObjectType { properties, .. })) => properties,
@@ -765,10 +805,45 @@ fn write_form_body(
     for (name, _prop) in properties.iter() {
         let var_name = sanitize_var_name(name);
         parts.push(format!("{}={}", name, poste_var(&var_name)));
-        env_vars.entry(var_name).or_default();
     }
     content.push_str(&parts.join("&"));
     content.push('\n');
+}
+
+/// Collect form body field names from a request body schema for file-level @var definitions.
+fn collect_form_body_fields(
+    api: &OpenAPI,
+    body: &ReferenceOr<RequestBody>,
+    file_vars: &mut Vec<(String, String)>,
+) {
+    let body_item = match body {
+        ReferenceOr::Item(item) => item,
+        ReferenceOr::Reference { reference } => match resolve_ref_request_body(api, reference) {
+            Some(item) => item,
+            None => return,
+        },
+    };
+
+    for (content_type, media_type) in &body_item.content {
+        if content_type != "application/x-www-form-urlencoded" {
+            continue;
+        }
+        if let Some(schema) = &media_type.schema {
+            if let Some(s) = get_schema(api, schema) {
+                let properties = match &s.schema_kind {
+                    SchemaKind::Type(Type::Object(ObjectType { properties, .. })) => properties,
+                    SchemaKind::Any(any) => &any.properties,
+                    _ => return,
+                };
+                for (name, _prop) in properties.iter() {
+                    let var_name = sanitize_var_name(name);
+                    if !file_vars.iter().any(|(n, _)| n == &var_name) {
+                        file_vars.push((var_name, String::new()));
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -890,15 +965,16 @@ mod tests {
             "raw path should be replaced: {}",
             c
         );
-        // Should also have the path param in env_vars (with the path param name)
+        // Should also have @petId at file top as file-level @var
         assert!(
-            result.env_vars.contains_key("petId"),
-            "env_vars should contain petId"
+            c.contains("@petId ="),
+            "file should have @petId @var: {}",
+            c
         );
-        assert_eq!(
-            result.env_vars.get("petId").unwrap(),
-            &String::new(),
-            "default should be empty"
+        // Path param should NOT be in env_vars (it's file-level now)
+        assert!(
+            !result.env_vars.contains_key("petId"),
+            "petId should not be in env_vars"
         );
     }
 
@@ -1000,8 +1076,11 @@ mod tests {
             "second query on URL: {}",
             c
         );
-        assert!(result.env_vars.contains_key("limit"), "limit in env_vars");
-        assert!(result.env_vars.contains_key("status"), "status in env_vars");
+        // Query params should be @var at file top, not in env_vars
+        assert!(c.contains("@limit ="), "file should have @limit: {}", c);
+        assert!(c.contains("@status ="), "file should have @status: {}", c);
+        assert!(!result.env_vars.contains_key("limit"), "limit not in env_vars");
+        assert!(!result.env_vars.contains_key("status"), "status not in env_vars");
     }
 
     // -----------------------------------------------------------------------
@@ -1060,9 +1139,15 @@ mod tests {
         let result = import_one(spec, "https://api.example.com");
         let c = &result.files[0].content;
         assert!(c.contains("Cookie:"), "Cookie header: {}", c);
+        // Cookie param should be @var at file top, not in env_vars
         assert!(
-            result.env_vars.contains_key("session_id"),
-            "cookie var in env"
+            c.contains("@session_id ="),
+            "file should have @session_id: {}",
+            c
+        );
+        assert!(
+            !result.env_vars.contains_key("session_id"),
+            "cookie var not in env"
         );
     }
 
@@ -1325,8 +1410,11 @@ mod tests {
         );
         assert!(c.contains("name={{name}}"), "form field: {}", c);
         assert!(c.contains("status={{status}}"), "form field: {}", c);
-        assert!(result.env_vars.contains_key("name"), "name in env_vars");
-        assert!(result.env_vars.contains_key("status"), "status in env_vars");
+        // Form body fields should be @var at file top, not in env_vars
+        assert!(c.contains("@name ="), "file should have @name: {}", c);
+        assert!(c.contains("@status ="), "file should have @status: {}", c);
+        assert!(!result.env_vars.contains_key("name"), "name not in env_vars");
+        assert!(!result.env_vars.contains_key("status"), "status not in env_vars");
     }
 
     // -----------------------------------------------------------------------
@@ -1409,7 +1497,16 @@ mod tests {
             }
         }"#;
         let result = import_one(spec, "https://api.example.com");
-        assert_eq!(result.env_vars.get("status").unwrap(), "available");
+        // Default should be in @var at file top, not in env_vars
+        assert!(
+            result.files[0].content.contains("@status = available"),
+            "file should have @status = available: {}",
+            result.files[0].content
+        );
+        assert!(
+            !result.env_vars.contains_key("status"),
+            "status not in env_vars"
+        );
     }
 
     // -----------------------------------------------------------------------
