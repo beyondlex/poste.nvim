@@ -65,7 +65,7 @@ impl SpecImporter for PostmanImporter {
             }
 
             let mut content = String::new();
-            content.push_str(&format!("@base_url = {{{{base_url}}}}\n"));
+            content.push_str("@base_url = {{base_url}}\n");
             content.push('\n');
 
             process_items(

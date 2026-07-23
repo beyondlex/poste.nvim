@@ -117,7 +117,7 @@ pub fn execute(args: ResolveArgs) -> Result<()> {
             }
             None => {
                 if args.format != "verbose" {
-                    println!("");
+                    println!();
                 } else {
                     println!("{{\"value\": null, \"source\": \"unresolved\"}}");
                 }
