@@ -1,50 +1,14 @@
 local state = require("poste.state")
-
 local M = {}
 
 local DESCRIPTIONS = {
-  http_source = {
-    run = "Execute request under cursor",
-    run_hsplit = "Execute request, horizontal split",
-    jump_next = "Jump to next request block",
-    jump_prev = "Jump to previous request block",
-    goto_definition = "Go to variable definition",
-    goto_references = "Show variable references",
-    quickfix_next = "Next quickfix item",
-    quickfix_prev = "Previous quickfix item",
-    paste_curl = "Paste clipboard as cURL request",
-    copy_as_curl = "Copy request as cURL command",
-    toggle_outline = "Toggle outline window",
-    pick_env = "Pick environment",
-    show_var_value = "Show variable value / response chain",
-    show_history = "Open request history",
-    help = "Show this help window",
-  },
-  http_response = {
-    close = "Close response window",
-    rerun = "Re-run request",
-    view_body = "View response body",
-    view_verbose = "View verbose output",
-    view_assertions = "View assertion results",
-    view_script_logs = "View pre/post script logs",
-    next_tab = "Next response tab",
-    prev_tab = "Previous response tab",
-    image_preview = "Render image inline or open externally",
-  },
-  http_history = {
-    close = "Close history window",
-    delete_entry = "Delete current history entry",
-    focus_detail = "Focus detail pane",
-  },
   sql_source = {
     run = "Execute SQL statement",
     show_ddl = "Show DDL / column info",
-    goto_definition = "Go to connection/database/table definition",
     format = "Format SQL",
     clear_filter = "Clear filter / search",
     toggle_db_browser = "Toggle DB Browser panel",
     trigger_completion = "Trigger SQL completion",
-    toggle_log = "Toggle execution log",
     help = "Show this help window",
   },
   sql_dataset = {
@@ -113,9 +77,6 @@ local DESCRIPTIONS = {
 }
 
 local SECTION_TITLES = {
-  http_source = "HTTP Request Buffer",
-  http_response = "HTTP Response Buffer",
-  http_history = "HTTP Request History",
   sql_source = "SQL Source Buffer",
   sql_dataset = "SQL Dataset Buffer",
   sql_table_ops = "SQL Table Ops",
@@ -123,33 +84,22 @@ local SECTION_TITLES = {
   sql_introspect = "Introspect Float",
 }
 
-local function sections_for_filetype(ft)
-  if ft == "poste_sql" or ft == "poste_sqlite" then
-    return { "sql_source", "sql_dataset", "sql_table_ops", "sql_db_browser", "sql_introspect" }
-  end
-  return { "http_source", "http_response", "http_history" }
-end
-
 function M.open()
   local lines = {}
   local width = 50
-  local ft = vim.bo.filetype
-
-  for _, section in ipairs(sections_for_filetype(ft)) do
+  local sections = { "sql_source", "sql_dataset", "sql_table_ops", "sql_db_browser", "sql_introspect" }
+  for _, section in ipairs(sections) do
     local title = SECTION_TITLES[section] or section
     local km = state.config.keymaps[section] or {}
     local desc = DESCRIPTIONS[section] or {}
-
     table.insert(lines, "")
     table.insert(lines, "  " .. title)
     table.insert(lines, "  " .. string.rep("─", 46))
-
     local actions = {}
     for action, _ in pairs(km) do
       table.insert(actions, action)
     end
     table.sort(actions)
-
     for _, action in ipairs(actions) do
       local key = state.get_keymap(section, action)
       if key and key ~= false then
@@ -161,21 +111,15 @@ function M.open()
       end
     end
   end
-
   local close_keys = {}
   local function collect_close(section, action)
     local k = state.get_keymap(section, action)
     if k then close_keys[state.format_key_string(k)] = true end
   end
-  if ft == "poste_sql" or ft == "poste_sqlite" then
-    collect_close("sql_dataset", "close")
-    collect_close("sql_db_browser", "close")
-    collect_close("sql_introspect", "close")
-    collect_close("sql_introspect", "close_alt")
-  else
-    collect_close("http_response", "close")
-    collect_close("http_history", "close")
-  end
+  collect_close("sql_dataset", "close")
+  collect_close("sql_db_browser", "close")
+  collect_close("sql_introspect", "close")
+  collect_close("sql_introspect", "close_alt")
   local close_parts = {}
   for k in pairs(close_keys) do
     table.insert(close_parts, k)
@@ -183,28 +127,22 @@ function M.open()
   table.sort(close_parts, function(a, b) return #a < #b end)
   local close_text = #close_parts > 0 and table.concat(close_parts, " / ") or "q"
   table.insert(lines, "  " .. close_text .. "  close")
-
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].filetype = "poste_help"
-
   local height = math.min(#lines, vim.o.lines - 4)
   local win = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
     row = 2, col = math.floor((vim.o.columns - width) / 2),
     width = width, height = height,
-    style = "minimal",
-    border = "rounded",
-    title = " Poste Keymaps ",
-    title_pos = "center",
+    style = "minimal", border = "rounded",
+    title = " Poste Keymaps ", title_pos = "center",
   })
-
   vim.keymap.set("n", "q", function() pcall(vim.api.nvim_win_close, win, true) end, { buffer = buf, nowait = true })
   vim.keymap.set("n", "<Esc>", function() pcall(vim.api.nvim_win_close, win, true) end, { buffer = buf, nowait = true })
-
   local ns = vim.api.nvim_create_namespace("poste_help")
   for i, line in ipairs(lines) do
     if line:find("^  %u%a") then
