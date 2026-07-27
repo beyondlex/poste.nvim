@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod connection;
 mod context;
+mod exec_file;
 mod fmt;
 mod import;
 mod introspect;
@@ -48,6 +49,8 @@ enum Commands {
         #[command(subcommand)]
         source: import::ImportSource,
     },
+    /// Execute a SQL file with streaming progress
+    ExecFile(exec_file::ExecFileArgs),
     /// Resolve variables in a request block
     Resolve(resolve::ResolveArgs),
 }
@@ -79,6 +82,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Import { source }) => {
             import::execute(source)?;
+        }
+        Some(Commands::ExecFile(args)) => {
+            exec_file::execute(args).await?;
         }
         Some(Commands::Resolve(args)) => {
             resolve::execute(args)?;
