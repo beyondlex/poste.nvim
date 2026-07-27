@@ -111,6 +111,7 @@ where
         "database": database,
         "dialect": summary.dialect,
         "mode": args.mode,
+        "rolled_back": args.mode == "transaction" && summary.failed > 0,
     });
     emit(&summary_json.to_string());
 
@@ -625,7 +626,8 @@ where
 
     let mut in_transaction = false;
     if mode == "transaction" {
-        conn.execute("BEGIN").await?;
+        conn.execute("SET autocommit = 0").await
+            .map_err(|e| anyhow::anyhow!("Failed to disable autocommit: {}", e))?;
         in_transaction = true;
     }
 
@@ -722,7 +724,10 @@ where
     }
 
     if in_transaction {
-        conn.execute("COMMIT").await.ok();
+        if *failed == 0 {
+            conn.execute("COMMIT").await.ok();
+        }
+        conn.execute("SET autocommit = 1").await.ok();
     }
     drop(conn);
     pool.close().await;
