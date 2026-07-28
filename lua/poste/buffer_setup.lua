@@ -43,11 +43,6 @@ function M.setup_buffer_keymaps(buf)
     if k and nav.trigger_completion then vim.keymap.set("n", k, nav.trigger_completion, keymap_opts) end
   end
 
-  local k = km("sql_source", "help", "g?")
-  if k then
-    vim.keymap.set("n", k, function() require("poste.help").open() end, keymap_opts)
-  end
-
   local indicator_ns = vim.api.nvim_create_namespace("poste_indicator")
   local group = vim.api.nvim_create_augroup("PosteClearIndicators_" .. buf, { clear = true })
   vim.api.nvim_create_autocmd("TextChanged", {
