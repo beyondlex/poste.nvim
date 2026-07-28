@@ -28,7 +28,7 @@ local function ensure_backdrop()
     row = 0,
     col = 0,
     style = "minimal",
-    zindex = 1,
+    zindex = 49,
     focusable = false,
   })
   vim.wo[backdrop_win].winhl = "Normal:PosteBackdrop"
@@ -83,7 +83,7 @@ function M.open(opts)
     col = col,
     style = "minimal",
     border = border,
-    zindex = 2,
+    zindex = 50,
   }
   if opts.title then
     win_opts.title = opts.title
