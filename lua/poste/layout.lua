@@ -155,7 +155,7 @@ function M.progress(current, total, opts)
     local bar_chars = { " ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█" }
     table.insert(bar_parts, bar_chars[frac + 1])
   end
-  local bar = "[" .. table.concat(bar_parts) .. string.rep(" ", bar_width - filled - (frac > 0 and 1 or 0)) .. "]"
+  local bar = table.concat(bar_parts) .. string.rep("░", bar_width - filled - (frac > 0 and 1 or 0))
 
   local label = string.format("%d/%d %d%%", current, total, math.floor(pct * 100))
   return { bar .. " " .. label }
