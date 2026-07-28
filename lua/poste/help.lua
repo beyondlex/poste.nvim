@@ -135,10 +135,9 @@ function M.open()
   end
   table.sort(close_parts, function(a, b) return #a < #b end)
   local close_text = #close_parts > 0 and table.concat(close_parts, " / ") or "q"
-  table.insert(lines, "  " .. close_text .. "  close")
 
   local d = dialog.open({
-    title = " Poste Keymaps ",
+    title = string.format(" Poste Keymaps   [%s] close ", close_text),
     width = width,
     height = math.min(#lines, vim.o.lines - 4),
   })
