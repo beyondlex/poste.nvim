@@ -144,8 +144,10 @@ function M:update(lines, highlights)
   vim.api.nvim_buf_clear_namespace(self.buf, ns, 0, -1)
   if highlights then
     for _, h in ipairs(highlights) do
+      local end_col = h.col_end
+      if end_col == -1 then end_col = 99999 end
       vim.api.nvim_buf_set_extmark(self.buf, ns, h.line, h.col_start, {
-        end_col = h.col_end,
+        end_col = end_col,
         hl_group = h.hl_group,
       })
     end

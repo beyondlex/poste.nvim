@@ -99,7 +99,7 @@ function M.open()
     table.insert(lines, "  " .. title)
     table.insert(highlights, { line = #lines - 1, col_start = 2, col_end = 2 + #title, hl_group = "Title" })
     table.insert(lines, "  " .. string.rep("─", 46))
-    table.insert(highlights, { line = #lines - 1, col_start = 2, col_end = -1, hl_group = "Comment" })
+    table.insert(highlights, { line = #lines - 1, col_start = 2, col_end = #lines[#lines], hl_group = "Comment" })
     local actions = {}
     for action, _ in pairs(km) do
       table.insert(actions, action)
