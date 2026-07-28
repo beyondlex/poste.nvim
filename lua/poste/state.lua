@@ -96,7 +96,7 @@ M.config = {
 M.current_env = M.config.default_env
 M._sql_session = nil
 
-local ok, sql_state = pcall(require, "poste.sql.state")
+local ok, sql_state = pcall(require, "poste-sql.state")
 if ok then M.sql = sql_state end
 
 local KEY_DISPLAY_NAMES = {

@@ -4,7 +4,7 @@ local M = {}
 local function get_nav(buf)
   local ft = vim.api.nvim_buf_get_option(buf, "filetype")
   if ft == "poste_sql" or ft == "poste_sqlite" then
-    local ok, mod = pcall(require, "poste.sql.nav")
+    local ok, mod = pcall(require, "poste-sql.nav")
     if ok then return mod end
   end
   return nil
@@ -13,7 +13,7 @@ end
 local function get_run_request(buf)
   local ft = vim.api.nvim_buf_get_option(buf, "filetype")
   if ft == "poste_sql" or ft == "poste_sqlite" then
-    local ok, mod = pcall(require, "poste.sql.init")
+    local ok, mod = pcall(require, "poste-sql.init")
     if ok and mod.run_sql_request then return mod.run_sql_request end
   end
   return nil
