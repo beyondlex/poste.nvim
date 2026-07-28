@@ -81,10 +81,12 @@ impl ConnectionConfig {
             "sqlite" => {
                 let path = self.path.as_deref().unwrap_or(":memory:");
                 // sqlx expects: sqlite::memory: or sqlite:/absolute/path or sqlite:relative/path
+                // sqlx 0.8 defaults to mode=rw (no create), so we add ?mode=rwc to create
+                // the file if it doesn't exist.
                 if path == ":memory:" {
                     "sqlite::memory:".to_string()
                 } else {
-                    format!("sqlite:{}", path)
+                    format!("sqlite:{}?mode=rwc", path)
                 }
             }
             "postgres" | "mysql" => {
@@ -141,8 +143,14 @@ impl ConnectionStore {
         match config_path {
             Some(path) => {
                 let content = std::fs::read_to_string(&path)?;
-                let connections: HashMap<String, ConnectionConfig> =
+                let mut connections: HashMap<String, ConnectionConfig> =
                     serde_json::from_str(&content)?;
+                // Normalize dialect aliases (e.g. mariadb → mysql)
+                for conn in connections.values_mut() {
+                    if conn.dialect == "mariadb" {
+                        conn.dialect = "mysql".to_string();
+                    }
+                }
                 Ok(Self {
                     connections,
                     source_path: Some(path),

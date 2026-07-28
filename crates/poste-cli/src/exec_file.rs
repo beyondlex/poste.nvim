@@ -381,27 +381,25 @@ where
                     row_count as usize
                 };
 
-                let columns: Vec<serde_json::Value> = if let Some(first_row) = rows.first() {
-                    first_row
-                        .columns()
-                        .iter()
-                        .map(|col| {
-                            json!({
-                                "name": col.name(),
-                                "type": col.type_info().name(),
-                            })
+                let col_types: Vec<String> = rows.first()
+                    .map(|first_row| first_row.columns().iter().map(|col| col.type_info().name().to_string()).collect())
+                    .unwrap_or_default();
+
+                let columns: Vec<serde_json::Value> = rows.first()
+                    .map(|first_row| first_row.columns().iter().map(|col| {
+                        json!({
+                            "name": col.name(),
+                            "type": col.type_info().name(),
                         })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                    }).collect())
+                    .unwrap_or_default();
 
                 let json_rows: Vec<Vec<serde_json::Value>> = rows
                     .iter()
                     .take(display_rows)
                     .map(|row| {
                         (0..row.len())
-                            .map(|i| sqlite_value_to_json(row, i))
+                            .map(|i| sqlite_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
                             .collect()
                     })
                     .collect();
@@ -537,21 +535,23 @@ where
                     row_count as usize
                 };
 
-                let columns: Vec<serde_json::Value> = if let Some(first_row) = rows.first() {
-                    first_row.columns().iter().map(|col| {
+                let col_types: Vec<String> = rows.first()
+                    .map(|first_row| first_row.columns().iter().map(|col| col.type_info().name().to_string()).collect())
+                    .unwrap_or_default();
+
+                let columns: Vec<serde_json::Value> = rows.first()
+                    .map(|first_row| first_row.columns().iter().map(|col| {
                         json!({
                             "name": col.name(),
                             "type": col.type_info().name(),
                             "nullable": col.type_info().name() != "BOOL",
                         })
-                    }).collect()
-                } else {
-                    Vec::new()
-                };
+                    }).collect())
+                    .unwrap_or_default();
 
                 let json_rows: Vec<Vec<serde_json::Value>> = rows
                     .iter().take(display_rows)
-                    .map(|row| (0..row.len()).map(|i| pg_value_to_json(row, i)).collect())
+                    .map(|row| (0..row.len()).map(|i| pg_value_to_json(row, i, col_types.get(i).map_or("", |s| s))).collect())
                     .collect();
 
                 Ok((columns, json_rows, row_count, elapsed, truncated, false))
@@ -670,20 +670,27 @@ where
                     row_count as usize
                 };
 
-                let columns: Vec<serde_json::Value> = if let Some(first_row) = rows.first() {
-                    first_row.columns().iter().map(|col| {
+                let col_types: Vec<String> = rows.first()
+                    .map(|first_row| first_row.columns().iter().map(|col| col.type_info().name().to_string()).collect())
+                    .unwrap_or_default();
+
+                let columns: Vec<serde_json::Value> = rows.first()
+                    .map(|first_row| first_row.columns().iter().map(|col| {
                         json!({
                             "name": col.name(),
                             "type": col.type_info().name(),
                         })
-                    }).collect()
-                } else {
-                    Vec::new()
-                };
+                    }).collect())
+                    .unwrap_or_default();
 
                 let json_rows: Vec<Vec<serde_json::Value>> = rows
-                    .iter().take(display_rows)
-                    .map(|row| (0..row.len()).map(|i| mysql_value_to_json(row, i)).collect())
+                    .iter()
+                    .take(display_rows)
+                    .map(|row| {
+                        (0..row.len())
+                            .map(|i| mysql_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
+                            .collect()
+                    })
                     .collect();
 
                 Ok((columns, json_rows, row_count, elapsed, truncated, false))
@@ -734,7 +741,7 @@ where
     Ok(())
 }
 
-fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize) -> serde_json::Value {
+fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize, _col_type: &str) -> serde_json::Value {
     use sqlx::{Row, ValueRef};
 
     if let Ok(raw) = row.try_get_raw(idx) {
@@ -765,7 +772,7 @@ fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize) -> serde_json
     serde_json::Value::Null
 }
 
-fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> serde_json::Value {
+fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> serde_json::Value {
     use sqlx::{Row, ValueRef};
     if let Ok(raw) = row.try_get_raw(idx) {
         if raw.is_null() { return serde_json::Value::Null; }
@@ -775,12 +782,24 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> serde_json::Valu
     if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) { return json!(v); }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) { return parsed; }
+        let upper = col_type.to_uppercase();
+        if upper == "TIMESTAMPTZ" || upper == "TIMESTAMP WITH TIME ZONE" {
+            if let Ok(dt) = v.parse::<chrono::DateTime<chrono::Utc>>() {
+                let local = dt.with_timezone(&chrono::Local);
+                return json!(local.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
+            }
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&v, "%Y-%m-%d %H:%M:%S%.f") {
+                let utc = dt.and_utc();
+                let local = utc.with_timezone(&chrono::Local);
+                return json!(local.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
+            }
+        }
         return json!(v);
     }
     serde_json::Value::Null
 }
 
-fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize) -> serde_json::Value {
+fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col_type: &str) -> serde_json::Value {
     use sqlx::{Row, ValueRef};
     if let Ok(raw) = row.try_get_raw(idx) {
         if raw.is_null() { return serde_json::Value::Null; }
@@ -790,6 +809,14 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize) -> serde_json::V
     if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) { return json!(v); }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) { return parsed; }
+        let upper = col_type.to_uppercase();
+        if upper == "TIMESTAMP" || upper == "TIMESTAMP WITHOUT TIME ZONE" {
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&v, "%Y-%m-%d %H:%M:%S%.f") {
+                let utc = dt.and_utc();
+                let local = utc.with_timezone(&chrono::Local);
+                return json!(local.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
+            }
+        }
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {

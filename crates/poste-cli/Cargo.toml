@@ -22,6 +22,7 @@ anyhow.workspace = true
 clap.workspace = true
 regex.workspace = true
 sqlx.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

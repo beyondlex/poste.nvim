@@ -220,7 +220,7 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize) -> Value {
             row.try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(idx)
                 .ok()
                 .flatten()
-                .map(|v| v.format("%Y-%m-%d %H:%M:%S%.3f").to_string()),
+                .map(|v| v.with_timezone(&chrono::Local).format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string()),
         ),
         "TIME" => value::opt_json(
             row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx)
