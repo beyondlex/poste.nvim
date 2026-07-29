@@ -28,6 +28,9 @@ pub struct RunArgs {
     /// Override database name (for USE statement context from the editor)
     #[arg(long)]
     pub database: Option<String>,
+    /// Connection URL (if provided, skips @connection resolution and connections.json)
+    #[arg(long)]
+    pub connection_url: Option<String>,
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
@@ -123,16 +126,9 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // ### in file content doesn't corrupt block boundary detection).
     request.body = resolve_file_includes(request.body_str(), &search_dir)?;
 
-    // Resolve connection name for SQL protocols
-    if crate::util::is_sql_protocol(&request.protocol)
-        && !crate::util::is_connection_url(&request.connection)
-        && !request.connection.is_empty()
-    {
-        let conn_name = request.connection.clone();
-        let conn_store = poste_exec::sql_connection::ConnectionStore::load(&search_dir)?;
-        request.connection = conn_store
-            .resolve(&conn_name, &env_vars)
-            .map_err(|e| anyhow::anyhow!("Failed to resolve connection '{}': {}", conn_name, e))?;
+    // Override connection with --connection-url (Lua-resolved, no connections.json needed)
+    if let Some(ref url) = args.connection_url {
+        request.connection = url.clone();
     }
 
     // Override database from --database flag

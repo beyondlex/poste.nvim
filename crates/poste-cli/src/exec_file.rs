@@ -1,7 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use serde_json::json;
-use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -23,7 +22,7 @@ pub struct ExecFileArgs {
     /// Output as JSON (always true when called from Lua)
     #[arg(long)]
     pub json: bool,
-    /// Connection name or URL (from DB browser context; overrides file @connection)
+    /// Connection URL (Lua-resolved, not a name from connections.json)
     #[arg(long)]
     pub connection: Option<String>,
     /// Override database name
@@ -39,23 +38,19 @@ pub async fn exec_file<F>(args: &ExecFileArgs, mut emit: F) -> Result<()>
 where
     F: FnMut(&str),
 {
-    let file_path = PathBuf::from(&args.file);
-    let abs_path = if file_path.is_absolute() {
-        file_path.clone()
+    let abs_path = std::path::Path::new(&args.file);
+    let abs_path = if abs_path.is_absolute() {
+        abs_path.to_path_buf()
     } else {
-        std::env::current_dir()?.join(&file_path)
+        std::env::current_dir()?.join(abs_path)
     };
-    let canonical = std::fs::canonicalize(&abs_path)
+    let abs_path = std::fs::canonicalize(&abs_path)
         .map_err(|e| anyhow::anyhow!("File not found: {} ({})", abs_path.display(), e))?;
-    let search_dir = canonical
-        .parent()
-        .context("File path resolves to root")?
-        .to_path_buf();
 
-    let content = std::fs::read_to_string(&canonical)?;
+    let content = std::fs::read_to_string(&abs_path)?;
 
-    // Resolve connection URL: prefer --connection CLI arg, fall back to file @connection directive
-    let mut connection_url = resolve_connection(args, &search_dir, &content)?;
+    // Resolve connection URL: --connection arg (must be a URL, resolved by Lua)
+    let mut connection_url = resolve_connection(args, &content)?;
 
     // Apply --database override
     if let Some(ref db) = args.database {
@@ -128,45 +123,16 @@ struct ExecSummary {
     dialect: String,
 }
 
-fn resolve_connection(args: &ExecFileArgs, search_dir: &std::path::Path, content: &str) -> Result<String> {
-    let conn_name = if let Some(ref conn) = args.connection {
-        if crate::util::is_connection_url(conn) {
-            return Ok(conn.clone());
-        }
-        conn.clone()
-    } else if let Some(conn) = extract_connection_directive(content) {
-        if crate::util::is_connection_url(&conn) {
-            return Ok(conn);
-        }
-        conn
-    } else {
-        anyhow::bail!(
-            "No connection specified. Use --connection <name_or_url> or add -- @connection <name> to the SQL file."
-        )
-    };
-
-    let env_vars = super::run::load_env_vars(search_dir, &args.env);
-
-    // Try multiple search paths: SQL file dir, then cwd
-    let search_paths = [
-        search_dir,
-        &std::env::current_dir().unwrap_or_else(|_| search_dir.to_path_buf()),
-    ];
-
-    for path in &search_paths {
-        let conn_store = poste_exec::sql_connection::ConnectionStore::load(path)?;
-        if conn_store.contains(&conn_name) {
-            return conn_store
-                .resolve(&conn_name, &env_vars)
-                .map_err(|e| anyhow::anyhow!("Failed to resolve connection '{}': {}", conn_name, e));
-        }
+fn resolve_connection(args: &ExecFileArgs, content: &str) -> Result<String> {
+    if let Some(ref conn) = args.connection {
+        return Ok(conn.clone());
     }
-
-    // Fallback: try loading from search_dir only (will give a clear error)
-    let conn_store = poste_exec::sql_connection::ConnectionStore::load(search_dir)?;
-    conn_store
-        .resolve(&conn_name, &env_vars)
-        .map_err(|e| anyhow::anyhow!("Failed to resolve connection '{}': {}", conn_name, e))
+    if let Some(conn) = extract_connection_directive(content) {
+        return Ok(conn);
+    }
+    anyhow::bail!(
+        "No connection specified. Use --connection <url> or add -- @connection <url> to the SQL file."
+    )
 }
 
 fn extract_connection_directive(content: &str) -> Option<String> {
