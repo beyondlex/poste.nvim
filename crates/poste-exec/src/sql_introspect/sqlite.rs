@@ -121,6 +121,26 @@ pub(super) async fn introspect_sqlite(params: &IntrospectParams) -> Result<Value
                 .ok_or_else(|| anyhow::anyhow!("table parameter required for ddl introspection"))?;
             build_create_table_from_introspect_sqlite(&pool, table).await?
         }
+        IntrospectType::TableInfo => {
+            let table = params.table.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("table parameter required for table_info introspection")
+            })?;
+            let quoted = dialect.quote_identifier(table);
+            let sql = format!(
+                "SELECT name AS table_name, (SELECT COUNT(*) FROM {}) AS row_count \
+                 FROM sqlite_master WHERE type='table' AND name=?1",
+                quoted
+            );
+            let rows = sqlx::query(&sql).bind(table).fetch_all(&pool).await?;
+            rows.iter()
+                .map(|row| {
+                    json!({
+                        "table_name": row.get::<String, _>("table_name"),
+                        "row_count": row.get::<i64, _>("row_count"),
+                    })
+                })
+                .collect()
+        }
     };
 
     pool.close().await;

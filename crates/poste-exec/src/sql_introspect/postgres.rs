@@ -138,6 +138,42 @@ pub(super) async fn introspect_postgres(params: &IntrospectParams) -> Result<Val
                 .ok_or_else(|| anyhow::anyhow!("table parameter required for ddl introspection"))?;
             build_create_table_from_introspect_postgres(&pool, schema, table).await?
         }
+        IntrospectType::TableInfo => {
+            let schema = params.schema.as_deref().unwrap_or("public");
+            let table = params.table.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("table parameter required for table_info introspection")
+            })?;
+            let sql = "\
+                SELECT c.relname AS table_name, \
+                       n.nspname AS schema_name, \
+                       pg_size_pretty(pg_total_relation_size(c.oid)) AS total_size, \
+                       pg_size_pretty(pg_table_size(c.oid)) AS data_size, \
+                       pg_size_pretty(pg_indexes_size(c.oid)) AS index_size, \
+                       s.n_live_tup AS row_count_estimate, \
+                       obj_description(c.oid) AS comment \
+                FROM pg_class c \
+                JOIN pg_namespace n ON n.oid = c.relnamespace \
+                LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid \
+                WHERE c.relkind = 'r' AND n.nspname = $1 AND c.relname = $2";
+            let rows = sqlx::query(sql)
+                .bind(schema)
+                .bind(table)
+                .fetch_all(&pool)
+                .await?;
+            rows.iter()
+                .map(|row| {
+                    json!({
+                        "table_name": row.get::<String, _>("table_name"),
+                        "schema_name": row.get::<String, _>("schema_name"),
+                        "total_size": row.get::<String, _>("total_size"),
+                        "data_size": row.get::<String, _>("data_size"),
+                        "index_size": row.get::<String, _>("index_size"),
+                        "row_count_estimate": row.get::<Option<i64>, _>("row_count_estimate"),
+                        "comment": row.get::<Option<String>, _>("comment"),
+                    })
+                })
+                .collect()
+        }
     };
 
     pool.close().await;

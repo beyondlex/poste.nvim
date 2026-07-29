@@ -20,6 +20,7 @@ pub enum IntrospectType {
     Columns,
     Indexes,
     Ddl,
+    TableInfo,
 }
 
 impl IntrospectType {
@@ -32,8 +33,9 @@ impl IntrospectType {
             "columns" => Ok(Self::Columns),
             "indexes" => Ok(Self::Indexes),
             "ddl" => Ok(Self::Ddl),
+            "table_info" => Ok(Self::TableInfo),
             _ => anyhow::bail!(
-                "Unknown introspect type: '{}'. Expected: databases, schemas, tables, columns, indexes, ddl",
+                "Unknown introspect type: '{}'. Expected: databases, schemas, tables, columns, indexes, ddl, table_info",
                 s
             ),
         }
@@ -48,6 +50,7 @@ impl IntrospectType {
             Self::Columns => "columns",
             Self::Indexes => "indexes",
             Self::Ddl => "ddl",
+            Self::TableInfo => "table_info",
         }
     }
 }
@@ -97,6 +100,10 @@ mod tests {
             IntrospectType::parse_str("indexes").unwrap(),
             IntrospectType::Indexes
         );
+        assert_eq!(
+            IntrospectType::parse_str("table_info").unwrap(),
+            IntrospectType::TableInfo
+        );
         assert!(IntrospectType::parse_str("invalid").is_err());
         assert!(IntrospectType::parse_str("").is_err());
     }
@@ -109,6 +116,7 @@ mod tests {
         assert_eq!(IntrospectType::Columns.as_str(), "columns");
         assert_eq!(IntrospectType::Indexes.as_str(), "indexes");
         assert_eq!(IntrospectType::Ddl.as_str(), "ddl");
+        assert_eq!(IntrospectType::TableInfo.as_str(), "table_info");
     }
 
     #[test]

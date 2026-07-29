@@ -15,6 +15,14 @@ pub(super) async fn introspect_mysql(params: &IntrospectParams) -> Result<Value>
 
     let dialect = MysqlDialect;
 
+    fn col_str(row: &MySqlRow, name: &str) -> Option<String> {
+        row.try_get::<Option<String>, _>(name).unwrap_or_else(|_| {
+            row.try_get::<Option<Vec<u8>>, _>(name)
+                .ok()
+                .flatten()
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        })
+    }
     fn col(row: &MySqlRow, name: &str) -> String {
         let bytes: Vec<u8> = row.get(name);
         String::from_utf8_lossy(&bytes).into_owned()
@@ -121,6 +129,44 @@ pub(super) async fn introspect_mysql(params: &IntrospectParams) -> Result<Value>
         }
         IntrospectType::Ddl => {
             build_create_table_from_introspect_mysql(&pool, params.table.as_deref()).await?
+        }
+        IntrospectType::TableInfo => {
+            let table = params.table.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("table parameter required for table_info introspection")
+            })?;
+            let sql = format!("SHOW TABLE STATUS WHERE `Name` = '{}'", table.replace('\'', "''"));
+            let rows = sqlx::query(&sql).fetch_all(&pool).await?;
+            let mut items = Vec::new();
+            for row in &rows {
+                let estimated_rows: Option<u64> = row.try_get("Rows").ok().flatten();
+                let data_length = row.try_get::<u64, _>("Data_length").unwrap_or(0);
+                let index_length = row.try_get::<u64, _>("Index_length").unwrap_or(0);
+                let has_data = data_length > 0 || index_length > 0;
+                let row_count = if estimated_rows.unwrap_or(0) == 0 && has_data {
+                    let quoted = format!("`{}`", table.replace('`', "``"));
+                    let count_sql = format!("SELECT COUNT(*) AS cnt FROM {}", quoted);
+                    sqlx::query(&count_sql)
+                        .fetch_one(&pool)
+                        .await
+                        .map(|r| r.get::<i64, _>("cnt") as u64)
+                        .unwrap_or(0)
+                } else {
+                    estimated_rows.unwrap_or(0)
+                };
+                items.push(json!({
+                    "table_name": col(row, "Name"),
+                    "engine": col_opt(row, "Engine"),
+                    "row_count": row_count,
+                    "data_length": data_length,
+                    "index_length": index_length,
+                    "auto_increment": row.try_get::<Option<i64>, _>("Auto_increment").ok().flatten(),
+                    "create_time": col_str(row, "Create_time"),
+                    "update_time": col_str(row, "Update_time"),
+                    "collation": col_opt(row, "Collation"),
+                    "comment": col_opt(row, "Comment"),
+                }));
+            }
+            items
         }
     };
 
