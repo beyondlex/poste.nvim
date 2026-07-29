@@ -142,7 +142,12 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize) -> Value {
     let type_name = row.column(idx).type_info().name();
 
     match type_name {
-        "BOOLEAN" => value::opt_json(row.try_get::<Option<bool>, _>(idx).ok().flatten()),
+        "BOOLEAN" => value::opt_json(
+            row.try_get::<Option<i8>, _>(idx)
+                .ok()
+                .flatten()
+                .map(|v| v as i64),
+        ),
         "TINYINT" => value::opt_json(
             row.try_get::<Option<i8>, _>(idx)
                 .ok()
