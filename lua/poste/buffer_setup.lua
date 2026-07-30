@@ -43,6 +43,27 @@ function M.setup_buffer_keymaps(buf)
     if k and nav.trigger_completion then vim.keymap.set("n", k, nav.trigger_completion, keymap_opts) end
   end
 
+  -- Snippet tab-stop navigation (insert mode, only intercept when snippet active)
+  local ft = vim.api.nvim_buf_get_option(buf, "filetype")
+  if ft == "poste_sql" or ft == "poste_sqlite" then
+    local sopts = { buffer = buf, noremap = true, silent = true }
+    vim.keymap.set({ "i", "s" }, "<Tab>", function()
+      if vim.snippet and vim.snippet.active() then
+        vim.snippet.jump(1)
+      else
+        vim.fn.feedkeys(vim.api.nvim_replace_termcodes("<Tab>", true, true, true), "n")
+      end
+    end, sopts)
+    vim.keymap.set({ "i", "s" }, "<S-Tab>", function()
+      if vim.snippet and vim.snippet.active() then
+        vim.snippet.jump(-1)
+      else
+        vim.fn.feedkeys(vim.api.nvim_replace_termcodes("<S-Tab>", true, true, true), "n")
+      end
+    end, sopts)
+
+    end
+
   local indicator_ns = vim.api.nvim_create_namespace("poste_indicator")
   local group = vim.api.nvim_create_augroup("PosteClearIndicators_" .. buf, { clear = true })
   vim.api.nvim_create_autocmd("TextChanged", {
