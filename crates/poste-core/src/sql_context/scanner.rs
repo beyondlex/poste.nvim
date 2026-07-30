@@ -33,7 +33,13 @@ pub(crate) fn detect_scan_backward(
                     }
                     return ContextType::Table;
                 }
-                if is_column_keyword(&kw) {
+                // When skip_one_ident is true, a predicate keyword (in, between,
+                // like, is, exists) could be a table name that happens to match
+                // a SQL keyword (e.g. table "in" after FROM). Continue scanning
+                // backward to see if there's a table keyword before it.
+                if is_predicate_keyword(&kw) && skip_one_ident {
+                    // skip — continue scanning
+                } else if is_column_keyword(&kw) {
                     if !skip_one_ident
                         && (kw == "select"
                             || kw == "where"
