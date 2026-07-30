@@ -85,6 +85,7 @@ M.config = {
       search_prev = "N",
       help = "g?",
       table_info = "i",
+      create_object = "a",
     },
     sql_introspect = {
       close = "q",

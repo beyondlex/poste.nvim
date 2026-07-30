@@ -1,5 +1,53 @@
 local M = {}
 
+local state = nil
+local function get_state()
+  if not state then state = require("poste.state") end
+  return state
+end
+
+local function setup_hl()
+  vim.api.nvim_set_hl(0, "PosteLayoutSectionTitle", { fg = 0x7dcfff, bold = true })
+  vim.api.nvim_set_hl(0, "PosteLayoutParagraph",   { fg = 0x565f89 })
+  vim.api.nvim_set_hl(0, "PosteLayoutKey",          { fg = 0x98c379, bold = true })
+  vim.api.nvim_set_hl(0, "PosteLayoutValue",        { fg = 0xa9b1d6 })
+  get_state().apply_highlight_overrides({
+    "PosteLayoutSectionTitle", "PosteLayoutParagraph",
+    "PosteLayoutKey", "PosteLayoutValue",
+  })
+end
+setup_hl()
+vim.api.nvim_create_autocmd("ColorScheme", { callback = setup_hl })
+
+local function word_wrap(text, max_width)
+  if #text <= max_width then return { text } end
+  local lines = {}
+  while #text > 0 do
+    if #text <= max_width then
+      table.insert(lines, text)
+      break
+    end
+    local slice = text:sub(1, max_width)
+    local space_pos = slice:match("^.*()%s")
+    if space_pos then
+      table.insert(lines, text:sub(1, space_pos - 1))
+      text = text:sub(space_pos + 1):match("^%s*(.*)")
+    else
+      table.insert(lines, text:sub(1, max_width))
+      text = text:sub(max_width + 1)
+    end
+  end
+  return lines
+end
+
+--- Word-wrap text at spaces, falling back to hard break.
+---@param text string
+---@param max_width number
+---@return string[]
+function M.word_wrap(text, max_width)
+  return word_wrap(text, max_width)
+end
+
 --- Pad text to a given display width (handles CJK via strdisplaywidth).
 ---@param text string
 ---@param width number Target display width
@@ -169,6 +217,108 @@ function M.separator(opts)
   local width = opts.width or 60
   local char = opts.char or "─"
   return { string.rep(char, width) }
+end
+
+--- Section title with highlight.
+---@param opts table
+---  - text: string
+---  - indent: number? (default 2)
+---  - hl: string? (default "PosteLayoutSectionTitle", highlight group name)
+---@return { lines: string[], highlights: table[] }
+function M.section_title(opts)
+  opts = opts or {}
+  local text = opts.text or ""
+  local indent = opts.indent or 2
+  local hl = opts.hl or "PosteLayoutSectionTitle"
+  local prefix = string.rep(" ", indent)
+  local line = prefix .. text
+  local dw = vim.fn.strdisplaywidth(text)
+  return {
+    lines = { line },
+    highlights = { { line = 0, col_start = indent, col_end = indent + dw, hl_group = hl } },
+  }
+end
+
+--- Paragraph with optional word-wrap.
+---@param opts table
+---  - text: string|string[] (single string or array of lines)
+---  - max_width: number (container width)
+---  - indent: number? (default 4)
+---  - auto_wrap: boolean? (default true)
+---  - hl: string? (default "PosteLayoutParagraph", highlight group name)
+---@return { lines: string[], highlights: table[] }
+function M.paragraph(opts)
+  opts = opts or {}
+  local text = opts.text or ""
+  local max_width = opts.max_width or 60
+  local indent = opts.indent or 4
+  local auto_wrap = opts.auto_wrap ~= false
+  local hl = opts.hl or "PosteLayoutParagraph"
+  local prefix = string.rep(" ", indent)
+  local max_line = max_width - indent
+
+  local lines = {}
+  local highlights = {}
+  local texts = type(text) == "table" and text or { text }
+
+  for _, t in ipairs(texts) do
+    local raw = tostring(t)
+    if auto_wrap then
+      local wrapped = word_wrap(raw, max_line)
+      for _, wl in ipairs(wrapped) do
+        local li = #lines
+        table.insert(lines, prefix .. wl)
+        table.insert(highlights, { line = li, col_start = 0, col_end = #lines[li + 1], hl_group = hl })
+      end
+    else
+      local li = #lines
+      table.insert(lines, prefix .. raw)
+      table.insert(highlights, { line = li, col_start = 0, col_end = #lines[li + 1], hl_group = hl })
+    end
+  end
+
+  return { lines = lines, highlights = highlights }
+end
+
+--- Keymap hint bar. Each entry is rendered as `[key label]`.
+---@param opts table
+---  - mapping: { key: string, label: string }[] (ordered list of key-label pairs)
+---  - key_hl: string? (default "PosteLayoutKey", highlight group for key)
+---  - value_hl: string? (default "PosteLayoutValue", highlight group for label)
+---  - indent: number? (default 4)
+---  - sep: string? (default "  ", separator between entries)
+---@return { lines: string[], highlights: table[] }
+function M.keymaps(opts)
+  opts = opts or {}
+  local mapping = opts.mapping or {}
+  local key_hl = opts.key_hl or "PosteLayoutKey"
+  local value_hl = opts.value_hl or "PosteLayoutValue"
+  local indent = opts.indent or 4
+  local sep = opts.sep or "  "
+  local prefix = string.rep(" ", indent)
+
+  local parts = { prefix }
+  local highlights = {}
+  local byte_pos = #prefix
+
+  for _, entry in ipairs(mapping) do
+    local key = entry.key or ""
+    local label = entry.label or ""
+    local segment = "[" .. key .. " " .. label .. "]"
+    table.insert(parts, segment)
+    local key_start = byte_pos + 1
+    local key_end = key_start + #key
+    table.insert(highlights, { line = 0, col_start = key_start, col_end = key_end, hl_group = key_hl })
+    table.insert(highlights, { line = 0, col_start = key_end + 1, col_end = key_end + 1 + #label, hl_group = value_hl })
+    byte_pos = byte_pos + #segment
+    table.insert(parts, sep)
+    byte_pos = byte_pos + #sep
+  end
+
+  local line = table.concat(parts)
+  line = line:sub(1, -#sep - 1)
+
+  return { lines = { line }, highlights = highlights }
 end
 
 return M

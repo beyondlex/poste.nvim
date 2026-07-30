@@ -54,6 +54,7 @@ end
 ---  - height: number (default 10)
 ---  - border: string|false (default "rounded", false/"none" for no border)
 ---  - backdrop: boolean (default false, dim outside area)
+---  - close_on_leave: boolean (default true, close dialog on WinLeave)
 ---  - on_close: function (optional, called when dialog closes)
 ---  - keymaps: { [key] = function } (optional, additional keymaps)
 ---@return table Dialog handle with .buf, .win, .content_width, .content_height
@@ -120,13 +121,15 @@ function M.open(opts)
     end
   end
 
-  vim.api.nvim_create_autocmd("WinLeave", {
-    buffer = buf,
-    once = true,
-    callback = function()
-      self:close()
-    end,
-  })
+  if opts.close_on_leave ~= false then
+    vim.api.nvim_create_autocmd("WinLeave", {
+      buffer = buf,
+      once = true,
+      callback = function()
+        self:close()
+      end,
+    })
+  end
 
   return setmetatable(self, { __index = M })
 end
