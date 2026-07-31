@@ -144,5 +144,37 @@
       "in_string": false,
       "in_comment": false
     }
+  },
+  {
+    "name": "alter table modify column with prefix returns column",
+    "dialect": "generic",
+    "sql": "ALTER TABLE posts MODIFY COLUMN a█",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "a",
+      "tables": [
+        { "name": "posts", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
+  },
+  {
+    "name": "alter table add column with prefix returns column",
+    "dialect": "generic",
+    "sql": "ALTER TABLE users ADD COLUMN a█",
+    "expect": {
+      "ctx_type": "column",
+      "ctx_data": null,
+      "ctx_schema": null,
+      "prefix": "a",
+      "tables": [
+        { "name": "users", "alias": null, "schema": null }
+      ],
+      "in_string": false,
+      "in_comment": false
+    }
   }
 ]

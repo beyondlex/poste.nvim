@@ -101,6 +101,9 @@ pub(crate) fn detect_scan_backward(
                         if tokens[prev].kind == TokenKind::Keyword {
                             let prev_kw = tokens[prev].text(sql).to_ascii_lowercase();
                             if prev_kw == "add" || prev_kw == "modify" {
+                                if cursor_on_ident {
+                                    return ContextType::Column;
+                                }
                                 return ContextType::DataType;
                             }
                         }
