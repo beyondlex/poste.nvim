@@ -19,7 +19,8 @@ use std::collections::HashMap;
 
 /// Execute a SQL request. Dispatches to the appropriate database driver
 /// based on `request.protocol`.
-pub async fn execute_sql(request: &Request) -> Result<Response> {
+/// `timeout_secs`: per-statement timeout in seconds (0 = no timeout).
+pub async fn execute_sql(request: &Request, timeout_secs: u64) -> Result<Response> {
     let parsed = sql_parser::parse_sql_request(request)?;
 
     if parsed.statements.is_empty() {
@@ -48,9 +49,9 @@ pub async fn execute_sql(request: &Request) -> Result<Response> {
     }
 
     match request.protocol {
-        Protocol::Postgres => postgres::execute_postgres(&parsed).await,
-        Protocol::Mysql => mysql::execute_mysql(&parsed).await,
-        Protocol::Sqlite => sqlite::execute_sqlite(&parsed).await,
+        Protocol::Postgres => postgres::execute_postgres(&parsed, timeout_secs).await,
+        Protocol::Mysql => mysql::execute_mysql(&parsed, timeout_secs).await,
+        Protocol::Sqlite => sqlite::execute_sqlite(&parsed, timeout_secs).await,
         _ => anyhow::bail!("Not a SQL protocol: {:?}", request.protocol),
     }
 }

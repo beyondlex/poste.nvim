@@ -31,6 +31,9 @@ pub struct RunArgs {
     /// Connection URL (if provided, skips @connection resolution and connections.json)
     #[arg(long)]
     pub connection_url: Option<String>,
+    /// Per-statement timeout in seconds (0 = no timeout)
+    #[arg(long, default_value_t = 0)]
+    pub timeout: u64,
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
@@ -154,7 +157,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let cookie_jar = poste_exec::CookieJar::load(&args.env);
 
     // Execute
-    let response = poste_exec::Executor::execute(&request, Some(&cookie_jar)).await?;
+    let response = poste_exec::Executor::execute(&request, Some(&cookie_jar), args.timeout).await?;
 
     // Save cookies (best effort)
     if let Err(e) = cookie_jar.save() {

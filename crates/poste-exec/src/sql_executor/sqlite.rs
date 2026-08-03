@@ -10,6 +10,7 @@ use crate::sql_connection;
 
 pub(super) async fn execute_sqlite(
     parsed: &sql_parser::SqlParseResult,
+    timeout_secs: u64,
 ) -> anyhow::Result<Response> {
     use sqlx::sqlite::{SqlitePoolOptions, SqliteRow};
     use sqlx::{Column, Row, TypeInfo};
@@ -42,7 +43,18 @@ pub(super) async fn execute_sqlite(
                 || upper.starts_with("VALUES")
                 || upper.contains("RETURNING")
             {
-                let rows: Vec<SqliteRow> = sqlx::query(stmt).fetch_all(&pool).await?;
+                let fetch = sqlx::query(stmt).fetch_all(&pool);
+                let rows: Vec<SqliteRow> = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        fetch,
+                    ).await {
+                        Ok(rows) => rows?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    fetch.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
 
                 let columns: Vec<Value> = if let Some(first_row) = rows.first() {
@@ -82,7 +94,18 @@ pub(super) async fn execute_sqlite(
                     original_sql: None,
                 })
             } else {
-                let result = sqlx::query(stmt).execute(&pool).await?;
+                let exec = sqlx::query(stmt).execute(&pool);
+                let result = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        exec,
+                    ).await {
+                        Ok(result) => result?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    exec.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
 
                 Ok(StatementResult {

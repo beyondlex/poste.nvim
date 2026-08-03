@@ -9,13 +9,17 @@ use std::time::Instant;
 pub struct Executor;
 
 impl Executor {
-    pub async fn execute(request: &Request, cookie_jar: Option<&CookieJar>) -> Result<Response> {
+    pub async fn execute(
+        request: &Request,
+        cookie_jar: Option<&CookieJar>,
+        timeout_secs: u64,
+    ) -> Result<Response> {
         let start = Instant::now();
         let mut response = match request.protocol {
             Protocol::Http => Self::execute_http(request, cookie_jar).await,
             Protocol::Redis => Executor::execute_redis(request).await,
             Protocol::Mysql | Protocol::Postgres | Protocol::Sqlite => {
-                crate::sql_executor::execute_sql(request).await
+                crate::sql_executor::execute_sql(request, timeout_secs).await
             }
         }?;
         response.latency_ms = start.elapsed().as_millis() as u64;

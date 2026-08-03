@@ -65,6 +65,7 @@ pub(super) fn translate_pg_mysql_compat(stmt: &str) -> Option<(String, String)> 
 
 pub(super) async fn execute_postgres(
     parsed: &sql_parser::SqlParseResult,
+    timeout_secs: u64,
 ) -> anyhow::Result<Response> {
     use sqlx::postgres::{PgPoolOptions, PgRow};
     use sqlx::{Column, Row, TypeInfo};
@@ -99,7 +100,18 @@ pub(super) async fn execute_postgres(
                 || upper.starts_with("TABLE ")
                 || upper.contains("RETURNING")
             {
-                let rows: Vec<PgRow> = sqlx::query(&exec_stmt).fetch_all(&pool).await?;
+                let fetch = sqlx::query(&exec_stmt).fetch_all(&pool);
+                let rows: Vec<PgRow> = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        fetch,
+                    ).await {
+                        Ok(rows) => rows?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    fetch.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
 
                 let columns: Vec<Value> = if let Some(first_row) = rows.first() {
@@ -136,7 +148,18 @@ pub(super) async fn execute_postgres(
                     original_sql,
                 })
             } else {
-                let result = sqlx::query(&exec_stmt).execute(&pool).await?;
+                let exec = sqlx::query(&exec_stmt).execute(&pool);
+                let result = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        exec,
+                    ).await {
+                        Ok(result) => result?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    exec.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
 
                 Ok(StatementResult {

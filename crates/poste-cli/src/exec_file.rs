@@ -88,6 +88,7 @@ where
         &database,
         &statements,
         &args.mode,
+        args.timeout,
         max_rows,
         total,
         &mut emit,
@@ -191,6 +192,7 @@ async fn run_statements<F>(
     _database: &Option<String>,
     statements: &[String],
     mode: &str,
+    timeout_secs: u64,
     max_rows: u64,
     total: u64,
     emit: &mut F,
@@ -210,6 +212,7 @@ where
                 connection_url,
                 statements,
                 mode,
+                timeout_secs,
                 max_rows,
                 total,
                 emit,
@@ -225,6 +228,7 @@ where
                 connection_url,
                 statements,
                 mode,
+                timeout_secs,
                 max_rows,
                 total,
                 emit,
@@ -240,6 +244,7 @@ where
                 connection_url,
                 statements,
                 mode,
+                timeout_secs,
                 max_rows,
                 total,
                 emit,
@@ -276,6 +281,7 @@ async fn exec_sqlite<F>(
     connection_url: &str,
     statements: &[String],
     mode: &str,
+    timeout_secs: u64,
     max_rows: u64,
     total: u64,
     emit: &mut F,
@@ -331,8 +337,18 @@ where
                 || upper.starts_with("VALUES")
                 || upper.contains("RETURNING")
             {
-                let rows: Vec<sqlx::sqlite::SqliteRow> =
-                    sqlx::query(stmt_trimmed).fetch_all(&mut *conn).await?;
+                let fetch = sqlx::query(stmt_trimmed).fetch_all(&mut *conn);
+                let rows: Vec<sqlx::sqlite::SqliteRow> = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        fetch,
+                    ).await {
+                        Ok(rows) => rows?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    fetch.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 let row_count = rows.len() as u64;
 
@@ -372,7 +388,18 @@ where
 
                 Ok((columns, json_rows, row_count, elapsed, truncated, false))
             } else {
-                let _result = sqlx::query(stmt_trimmed).execute(&mut *conn).await?;
+                let exec = sqlx::query(stmt_trimmed).execute(&mut *conn);
+                let _result = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        exec,
+                    ).await {
+                        Ok(result) => result?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    exec.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true))
             }
@@ -435,6 +462,7 @@ async fn exec_postgres<F>(
     connection_url: &str,
     statements: &[String],
     mode: &str,
+    timeout_secs: u64,
     max_rows: u64,
     total: u64,
     emit: &mut F,
@@ -490,7 +518,18 @@ where
                 || upper.starts_with("VALUES")
                 || upper.contains("RETURNING")
             {
-                let rows: Vec<PgRow> = sqlx::query(stmt_trimmed).fetch_all(&mut *conn).await?;
+                let fetch = sqlx::query(stmt_trimmed).fetch_all(&mut *conn);
+                let rows: Vec<PgRow> = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        fetch,
+                    ).await {
+                        Ok(rows) => rows?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    fetch.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 let row_count = rows.len() as u64;
 
@@ -522,7 +561,18 @@ where
 
                 Ok((columns, json_rows, row_count, elapsed, truncated, false))
             } else {
-                let _result = sqlx::query(stmt_trimmed).execute(&mut *conn).await?;
+                let exec = sqlx::query(stmt_trimmed).execute(&mut *conn);
+                let _result = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        exec,
+                    ).await {
+                        Ok(result) => result?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    exec.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true))
             }
@@ -569,6 +619,7 @@ async fn exec_mysql<F>(
     connection_url: &str,
     statements: &[String],
     mode: &str,
+    timeout_secs: u64,
     max_rows: u64,
     total: u64,
     emit: &mut F,
@@ -625,7 +676,18 @@ where
                 || upper.starts_with("DESC ")
                 || upper.contains("RETURNING")
             {
-                let rows: Vec<MySqlRow> = sqlx::query(stmt_trimmed).fetch_all(&mut *conn).await?;
+                let fetch = sqlx::query(stmt_trimmed).fetch_all(&mut *conn);
+                let rows: Vec<MySqlRow> = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        fetch,
+                    ).await {
+                        Ok(rows) => rows?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    fetch.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 let row_count = rows.len() as u64;
 
@@ -661,7 +723,18 @@ where
 
                 Ok((columns, json_rows, row_count, elapsed, truncated, false))
             } else {
-                let _result = sqlx::query(stmt_trimmed).execute(&mut *conn).await?;
+                let exec = sqlx::query(stmt_trimmed).execute(&mut *conn);
+                let _result = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        exec,
+                    ).await {
+                        Ok(result) => result?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    exec.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true))
             }

@@ -8,7 +8,10 @@ use super::value;
 use super::{build_response, StatementResult};
 use crate::response::Response;
 
-pub(super) async fn execute_mysql(parsed: &sql_parser::SqlParseResult) -> anyhow::Result<Response> {
+pub(super) async fn execute_mysql(
+    parsed: &sql_parser::SqlParseResult,
+    timeout_secs: u64,
+) -> anyhow::Result<Response> {
     use sqlx::mysql::{MySqlPoolOptions, MySqlRow};
     use sqlx::{Column, Executor, Row, TypeInfo};
 
@@ -47,7 +50,18 @@ pub(super) async fn execute_mysql(parsed: &sql_parser::SqlParseResult) -> anyhow
                 || upper.starts_with("DESC ")
                 || upper.contains("RETURNING")
             {
-                let rows: Vec<MySqlRow> = sqlx::query(stmt).fetch_all(&mut *conn).await?;
+                let fetch = sqlx::query(stmt).fetch_all(&mut *conn);
+                let rows: Vec<MySqlRow> = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        fetch,
+                    ).await {
+                        Ok(rows) => rows?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    fetch.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
 
                 let columns: Vec<Value> = if let Some(first_row) = rows.first() {
@@ -87,7 +101,18 @@ pub(super) async fn execute_mysql(parsed: &sql_parser::SqlParseResult) -> anyhow
                     original_sql: None,
                 })
             } else {
-                let result = sqlx::query(stmt).execute(&mut *conn).await?;
+                let exec = sqlx::query(stmt).execute(&mut *conn);
+                let result = if timeout_secs > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        exec,
+                    ).await {
+                        Ok(result) => result?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    exec.await?
+                };
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
 
                 Ok(StatementResult {
