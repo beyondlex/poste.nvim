@@ -224,18 +224,12 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
                 .flatten()
                 .map(|v| v as i64),
         ),
-        "INT8" => value::opt_json(row.try_get::<Option<i64>, _>(idx).ok().flatten()),
+        "INT8" => value::opt_int_json(row.try_get::<Option<i64>, _>(idx).ok().flatten()),
         "FLOAT4" => value::opt_json(row.try_get::<Option<f32>, _>(idx).ok().flatten()),
         "FLOAT8" => value::opt_json(row.try_get::<Option<f64>, _>(idx).ok().flatten()),
         "NUMERIC" => {
             let val: Option<rust_decimal::Decimal> = row.try_get::<_, _>(idx).ok().flatten();
-            val.map(|v: rust_decimal::Decimal| {
-                v.to_string()
-                    .parse::<f64>()
-                    .map(|n| json!(n))
-                    .unwrap_or(json!(v.to_string()))
-            })
-            .unwrap_or(Value::Null)
+            val.map(value::decimal_json).unwrap_or(Value::Null)
         }
         "DATE" => value::date_fallback(
             row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx)

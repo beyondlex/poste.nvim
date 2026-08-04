@@ -209,7 +209,7 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize) -> Value {
                 .flatten()
                 .map(|v| v as i64),
         ),
-        "BIGINT" => value::opt_json(row.try_get::<Option<i64>, _>(idx).ok().flatten()),
+        "BIGINT" => value::opt_int_json(row.try_get::<Option<i64>, _>(idx).ok().flatten()),
         "BIGINT UNSIGNED" => {
             if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(idx) {
                 json!(v.to_string())
@@ -221,13 +221,7 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize) -> Value {
         "DOUBLE" => value::opt_json(row.try_get::<Option<f64>, _>(idx).ok().flatten()),
         "DECIMAL" => {
             let val: Option<rust_decimal::Decimal> = row.try_get::<_, _>(idx).ok().flatten();
-            val.map(|v: rust_decimal::Decimal| {
-                v.to_string()
-                    .parse::<f64>()
-                    .map(|n| json!(n))
-                    .unwrap_or(json!(v.to_string()))
-            })
-            .unwrap_or(Value::Null)
+            val.map(value::decimal_json).unwrap_or(Value::Null)
         }
         "DATE" => {
             if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx) {

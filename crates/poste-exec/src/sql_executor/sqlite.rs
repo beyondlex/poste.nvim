@@ -5,6 +5,7 @@ use poste_core::Protocol;
 use serde_json::{json, Value};
 
 use super::{build_response, StatementResult};
+use super::value;
 use crate::response::Response;
 use crate::sql_connection;
 
@@ -155,7 +156,7 @@ fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize) -> Value {
     }
 
     if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
-        return json!(v);
+        return value::int_json(v);
     }
 
     if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
