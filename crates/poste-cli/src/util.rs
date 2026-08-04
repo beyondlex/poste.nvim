@@ -7,6 +7,7 @@ pub fn is_sql_protocol(protocol: &poste_core::Protocol) -> bool {
 }
 
 /// Check if a connection string looks like a URL (not a name).
+#[allow(dead_code)]
 pub fn is_connection_url(conn: &str) -> bool {
     if conn.contains("://") {
         return true;

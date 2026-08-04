@@ -159,7 +159,7 @@ fn run_fixture_file(path: &str) {
 
         // Compare functions (skip if not in fixture)
         if let Some(ref expected_funcs) = f.expect.functions {
-            let mut result_funcs: Vec<&str> = result.functions.iter().copied().collect();
+            let mut result_funcs: Vec<&str> = result.functions.to_vec();
             result_funcs.sort_unstable();
             let mut expected_sorted = expected_funcs.clone();
             expected_sorted.sort_unstable();

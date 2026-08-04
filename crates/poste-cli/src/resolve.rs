@@ -383,12 +383,11 @@ fn format_as_curl(resolved: &str) -> String {
                     state = "body";
                 }
             }
-            "body" => {
-                if !trimmed.is_empty() {
-                    body.push_str(trimmed);
-                    body.push('\n');
-                }
+            "body" if !trimmed.is_empty() => {
+                body.push_str(trimmed);
+                body.push('\n');
             }
+            "body" => {}
             _ => {}
         }
     }

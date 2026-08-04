@@ -225,7 +225,7 @@ mod tests {
             .acquire_timeout(std::time::Duration::from_secs(3))
             .connect(&url)
             .await
-            .expect(&format!("Failed to connect to {}", url));
+            .unwrap_or_else(|_| panic!("Failed to connect to {}", url));
 
         let rows: Vec<sqlx::sqlite::SqliteRow> = sqlx::query("SELECT * FROM t")
             .fetch_all(&pool)
