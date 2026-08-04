@@ -57,9 +57,12 @@ where
         .map_err(|e| anyhow::anyhow!("File not found: {} ({})", abs_path.display(), e))?;
 
     let content = std::fs::read_to_string(&abs_path)?;
+    let search_dir = abs_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
 
     // Resolve connection URL: --connection arg (must be a URL, resolved by Lua)
-    let mut connection_url = resolve_connection(args, &content)?;
+    let mut connection_url = resolve_connection(args, &content, search_dir)?;
 
     // Apply --database override
     if let Some(ref db) = args.database {
@@ -137,16 +140,28 @@ struct ExecSummary {
     dialect: String,
 }
 
-fn resolve_connection(args: &ExecFileArgs, content: &str) -> Result<String> {
-    if let Some(ref conn) = args.connection {
-        return Ok(conn.clone());
-    }
-    if let Some(conn) = extract_connection_directive(content) {
+fn resolve_connection(
+    args: &ExecFileArgs,
+    content: &str,
+    search_dir: &std::path::Path,
+) -> Result<String> {
+    let conn = if let Some(ref conn) = args.connection {
+        conn.clone()
+    } else if let Some(conn) = extract_connection_directive(content) {
+        conn
+    } else {
+        anyhow::bail!(
+            "No connection specified. Use --connection <url> or add -- @connection <url> to the SQL file."
+        )
+    };
+
+    if crate::util::is_connection_url(&conn) {
         return Ok(conn);
     }
-    anyhow::bail!(
-        "No connection specified. Use --connection <url> or add -- @connection <url> to the SQL file."
-    )
+
+    let store = poste_exec::sql_connection::ConnectionStore::load(search_dir)?;
+    let env_vars = crate::run::load_env_vars(search_dir, &args.env);
+    store.resolve(&conn, &env_vars)
 }
 
 fn extract_connection_directive(content: &str) -> Option<String> {

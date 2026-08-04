@@ -349,7 +349,7 @@ mod tests {
             ssl_mode: None,
             extra_params: HashMap::new(),
         };
-        assert_eq!(config.to_url(), "sqlite:./data/app.db");
+        assert_eq!(config.to_url(), "sqlite:./data/app.db?mode=rwc");
     }
 
     #[test]

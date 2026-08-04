@@ -54,8 +54,8 @@ end
 ---@return string
 local function pad(text, width)
   local dw = vim.fn.strdisplaywidth(text)
-  local pad = math.max(0, width - dw)
-  return text .. string.rep(" ", pad)
+  local padding = math.max(0, width - dw)
+  return text .. string.rep(" ", padding)
 end
 M.pad = pad
 
