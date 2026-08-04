@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "CLI for Poste: run HTTP/SQL/Redis requests from file buffers"
-keywords = ["http", "sql", "redis", "rest-client", "cli"]
+description = "CLI for Poste: run SQL requests from file buffers"
+keywords = ["sql", "cli"]
 categories = ["command-line-utilities", "database"]
 
 [[bin]]

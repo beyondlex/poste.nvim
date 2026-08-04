@@ -160,7 +160,7 @@ fn resolve_connection(
     }
 
     let store = poste_exec::sql_connection::ConnectionStore::load(search_dir)?;
-    let env_vars = crate::run::load_env_vars(search_dir, &args.env);
+    let env_vars = crate::util::load_env_vars(search_dir, &args.env);
     store.resolve(&conn, &env_vars)
 }
 
