@@ -144,7 +144,7 @@ function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)
     local virt = build_virt_text("✓", "PosteSuccess", latency_ms, assertion_results)
     if #virt > 0 then
       vim.api.nvim_buf_set_extmark(buf, indicator_ns, line_0, 0, {
-        virt_text = success_virt,
+        virt_text = virt,
         virt_text_pos = "eol",
         hl_mode = "combine",
       })
@@ -158,7 +158,7 @@ function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)
     local virt = build_virt_text("✘", "PosteError", latency_ms, assertion_results)
     if #virt > 0 then
       vim.api.nvim_buf_set_extmark(buf, indicator_ns, line_0, 0, {
-        virt_text = error_virt,
+        virt_text = virt,
         virt_text_pos = "eol",
         hl_mode = "combine",
       })
