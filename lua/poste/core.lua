@@ -14,6 +14,8 @@ function M.setup(opts)
     return
   end
   vim.g.poste_core_setup_done = true
+
+  require("poste.install").ensure()
 end
 
 function M.status()
