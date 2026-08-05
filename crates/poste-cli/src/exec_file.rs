@@ -928,52 +928,40 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> 
             return serde_json::Value::Null;
         }
         "DATE" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx)
-            {
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx) {
                 return json!(v.format("%Y-%m-%d").to_string());
             }
         }
         "TIMESTAMP" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx)
-            {
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
                 return json!(v.format("%Y-%m-%d %H:%M:%S%.3f").to_string());
             }
         }
         "TIMESTAMPTZ" | "TIMESTAMP WITH TIME ZONE" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(
-                    idx,
-                ) {
+            if let Ok(Some(v)) = row
+                .try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(idx)
+            {
                 let local = v.with_timezone(&chrono::Local);
                 return json!(local.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string());
             }
         }
         "TIME" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx)
-            {
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx) {
                 return json!(v.format("%H:%M:%S%.3f").to_string());
             }
         }
         "UUID" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::uuid::Uuid>, _>(idx)
-            {
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::uuid::Uuid>, _>(idx) {
                 return json!(v.to_string());
             }
         }
         "INET" | "CIDR" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::ipnetwork::IpNetwork>, _>(idx)
-            {
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::ipnetwork::IpNetwork>, _>(idx) {
                 return json!(v.to_string());
             }
         }
         "JSON" | "JSONB" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx)
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx)
             {
                 return v.0;
             }
@@ -1050,43 +1038,33 @@ fn mysql_value_to_json(
             return serde_json::Value::Null;
         }
         "DATE" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx)
-            {
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx) {
                 return json!(v.format("%Y-%m-%d").to_string());
             }
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx)
-            {
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
                 return json!(v.format("%Y-%m-%d").to_string());
             }
         }
         "DATETIME" | "DATETIME2" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx)
-            {
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
                 return json!(v.format("%Y-%m-%d %H:%M:%S%.3f").to_string());
             }
         }
         "TIMESTAMP" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(
-                    idx,
-                ) {
+            if let Ok(Some(v)) = row
+                .try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(idx)
+            {
                 let local = v.with_timezone(&chrono::Local);
                 return json!(local.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string());
             }
         }
         "TIME" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx)
-            {
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx) {
                 return json!(v.format("%H:%M:%S%.3f").to_string());
             }
         }
         "JSON" => {
-            if let Ok(Some(v)) =
-                row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx)
+            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx)
             {
                 return v.0;
             }
