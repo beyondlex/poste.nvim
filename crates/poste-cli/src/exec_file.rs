@@ -10,6 +10,7 @@ type StatementResult = (
     u64,
     bool,
     bool,
+    u64,
 );
 
 #[derive(Parser)]
@@ -211,6 +212,7 @@ fn strip_sql_directives(content: &str) -> String {
     content
         .lines()
         .filter(|line| !directive_re.is_match(line))
+        .filter(|line| line.trim() != "###")
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -319,7 +321,7 @@ async fn exec_sqlite<F>(
     succeeded: &mut u64,
     failed: &mut u64,
     total_rows: &mut u64,
-    _total_affected: &mut u64,
+    total_affected: &mut u64,
 ) -> Result<()>
 where
     F: FnMut(&str),
@@ -429,10 +431,10 @@ where
                     })
                     .collect();
 
-                Ok((columns, json_rows, row_count, elapsed, truncated, false))
+                Ok((columns, json_rows, row_count, elapsed, truncated, false, 0))
             } else {
                 let exec = sqlx::query(stmt_trimmed).execute(&mut *conn);
-                let _result = if timeout_secs > 0 {
+                let result = if timeout_secs > 0 {
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(timeout_secs),
                         exec,
@@ -443,14 +445,16 @@ where
                 } else {
                     exec.await?
                 };
+                let affected = result.rows_affected();
+                *total_affected += affected;
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
-                Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true))
+                Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true, affected))
             }
         }
         .await;
 
         match stmt_result {
-            Ok((columns, json_rows, row_count, elapsed, truncated, _is_dml)) => {
+            Ok((columns, json_rows, row_count, elapsed, truncated, is_dml, affected)) => {
                 *succeeded += 1;
                 *total_rows += row_count;
 
@@ -461,7 +465,7 @@ where
                     "status": "ok",
                     "sql": stmt_trimmed,
                     "row_count": row_count,
-                    "affected_rows": serde_json::Value::Null,
+                    "affected_rows": if is_dml { json!(affected) } else { serde_json::Value::Null },
                     "execution_time_ms": elapsed,
                     "columns": columns,
                     "rows": json_rows,
@@ -513,7 +517,7 @@ async fn exec_postgres<F>(
     succeeded: &mut u64,
     failed: &mut u64,
     total_rows: &mut u64,
-    _total_affected: &mut u64,
+    total_affected: &mut u64,
 ) -> Result<()>
 where
     F: FnMut(&str),
@@ -622,10 +626,10 @@ where
                     })
                     .collect();
 
-                Ok((columns, json_rows, row_count, elapsed, truncated, false))
+                Ok((columns, json_rows, row_count, elapsed, truncated, false, 0))
             } else {
                 let exec = sqlx::query(stmt_trimmed).execute(&mut *conn);
-                let _result = if timeout_secs > 0 {
+                let result = if timeout_secs > 0 {
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(timeout_secs),
                         exec,
@@ -636,20 +640,22 @@ where
                 } else {
                     exec.await?
                 };
+                let affected = result.rows_affected();
+                *total_affected += affected;
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
-                Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true))
+                Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true, affected))
             }
         }
         .await;
 
         match stmt_result {
-            Ok((columns, json_rows, row_count, elapsed, truncated, _is_dml)) => {
+            Ok((columns, json_rows, row_count, elapsed, truncated, is_dml, affected)) => {
                 *succeeded += 1;
                 *total_rows += row_count;
                 let result_obj = json!({
                     "type": "result", "seq": seq, "total": total, "status": "ok",
                     "sql": stmt_trimmed, "row_count": row_count,
-                    "affected_rows": serde_json::Value::Null,
+                    "affected_rows": if is_dml { json!(affected) } else { serde_json::Value::Null },
                     "execution_time_ms": elapsed, "columns": columns,
                     "rows": json_rows, "rows_truncated": truncated,
                 });
@@ -693,7 +699,7 @@ async fn exec_mysql<F>(
     succeeded: &mut u64,
     failed: &mut u64,
     total_rows: &mut u64,
-    _total_affected: &mut u64,
+    total_affected: &mut u64,
 ) -> Result<()>
 where
     F: FnMut(&str),
@@ -805,10 +811,10 @@ where
                     })
                     .collect();
 
-                Ok((columns, json_rows, row_count, elapsed, truncated, false))
+                Ok((columns, json_rows, row_count, elapsed, truncated, false, 0))
             } else {
                 let exec = sqlx::query(stmt_trimmed).execute(&mut *conn);
-                let _result = if timeout_secs > 0 {
+                let result = if timeout_secs > 0 {
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(timeout_secs),
                         exec,
@@ -819,20 +825,22 @@ where
                 } else {
                     exec.await?
                 };
+                let affected = result.rows_affected();
+                *total_affected += affected;
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
-                Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true))
+                Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true, affected))
             }
         }
         .await;
 
         match stmt_result {
-            Ok((columns, json_rows, row_count, elapsed, truncated, _is_dml)) => {
+            Ok((columns, json_rows, row_count, elapsed, truncated, is_dml, affected)) => {
                 *succeeded += 1;
                 *total_rows += row_count;
                 let result_obj = json!({
                     "type": "result", "seq": seq, "total": total, "status": "ok",
                     "sql": stmt_trimmed, "row_count": row_count,
-                    "affected_rows": serde_json::Value::Null,
+                    "affected_rows": if is_dml { json!(affected) } else { serde_json::Value::Null },
                     "execution_time_ms": elapsed, "columns": columns,
                     "rows": json_rows, "rows_truncated": truncated,
                 });
