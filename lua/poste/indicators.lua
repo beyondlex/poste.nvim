@@ -80,15 +80,6 @@ local function build_virt_text(status_icon, status_hl, latency_ms, assertion_res
   return virt_text
 end
 
---- Clear all virt_text indicators for a buffer.
-local function clear_all_virt_text(buf)
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
-  vim.api.nvim_buf_clear_namespace(buf, indicator_ns, 0, -1)
-  if spinner_marks[buf] then
-    spinner_marks[buf] = {}
-  end
-end
-
 --- Place or update indicator (virt_text only: status icon + latency/assertions).
 --- status: "running" | "success" | "error"
 function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)

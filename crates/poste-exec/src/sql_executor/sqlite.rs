@@ -4,8 +4,8 @@ use poste_core::sql_parser;
 use poste_core::Protocol;
 use serde_json::{json, Value};
 
-use super::{build_response, StatementResult};
 use super::value;
+use super::{build_response, StatementResult};
 use crate::response::Response;
 use crate::sql_connection;
 
@@ -46,10 +46,9 @@ pub(super) async fn execute_sqlite(
             {
                 let fetch = sqlx::query(stmt).fetch_all(&pool);
                 let rows: Vec<SqliteRow> = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        fetch,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                        .await
+                    {
                         Ok(rows) => rows?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }
@@ -97,10 +96,9 @@ pub(super) async fn execute_sqlite(
             } else {
                 let exec = sqlx::query(stmt).execute(&pool);
                 let result = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        exec,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
+                        .await
+                    {
                         Ok(result) => result?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }

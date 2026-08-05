@@ -117,7 +117,10 @@ mod tests {
         assert_eq!(int_json(-MAX_SAFE_INT), json!("-9007199254740992"));
         assert_eq!(int_json(i64::MAX), json!(i64::MAX.to_string()));
         assert_eq!(int_json(i64::MIN), json!(i64::MIN.to_string()));
-        assert_eq!(int_json(2_084_515_900_853_196_878), json!("2084515900853196878"));
+        assert_eq!(
+            int_json(2_084_515_900_853_196_878),
+            json!("2084515900853196878")
+        );
     }
 
     #[test]

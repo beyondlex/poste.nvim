@@ -372,10 +372,9 @@ where
             {
                 let fetch = sqlx::query(stmt_trimmed).fetch_all(&mut *conn);
                 let rows: Vec<sqlx::sqlite::SqliteRow> = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        fetch,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                        .await
+                    {
                         Ok(rows) => rows?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }
@@ -435,10 +434,9 @@ where
             } else {
                 let exec = sqlx::query(stmt_trimmed).execute(&mut *conn);
                 let result = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        exec,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
+                        .await
+                    {
                         Ok(result) => result?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }
@@ -568,10 +566,9 @@ where
             {
                 let fetch = sqlx::query(stmt_trimmed).fetch_all(&mut *conn);
                 let rows: Vec<PgRow> = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        fetch,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                        .await
+                    {
                         Ok(rows) => rows?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }
@@ -630,10 +627,9 @@ where
             } else {
                 let exec = sqlx::query(stmt_trimmed).execute(&mut *conn);
                 let result = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        exec,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
+                        .await
+                    {
                         Ok(result) => result?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }
@@ -752,10 +748,9 @@ where
             {
                 let fetch = sqlx::query(stmt_trimmed).fetch_all(&mut *conn);
                 let rows: Vec<MySqlRow> = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        fetch,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                        .await
+                    {
                         Ok(rows) => rows?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }
@@ -815,10 +810,9 @@ where
             } else {
                 let exec = sqlx::query(stmt_trimmed).execute(&mut *conn);
                 let result = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        exec,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
+                        .await
+                    {
                         Ok(result) => result?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }

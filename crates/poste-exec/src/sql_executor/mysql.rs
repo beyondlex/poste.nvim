@@ -52,10 +52,9 @@ pub(super) async fn execute_mysql(
             {
                 let fetch = sqlx::query(stmt).fetch_all(&mut *conn);
                 let rows: Vec<MySqlRow> = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        fetch,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                        .await
+                    {
                         Ok(rows) => rows?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }
@@ -103,10 +102,9 @@ pub(super) async fn execute_mysql(
             } else {
                 let exec = sqlx::query(stmt).execute(&mut *conn);
                 let result = if timeout_secs > 0 {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        exec,
-                    ).await {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
+                        .await
+                    {
                         Ok(result) => result?,
                         Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
                     }
