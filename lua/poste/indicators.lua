@@ -137,7 +137,10 @@ function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)
     spinner_timer:start(C.SPINNER_INTERVAL_MS, C.SPINNER_INTERVAL_MS, vim.schedule_wrap(update_spinner))
 
   elseif status == "success" then
-    clear_all_virt_text(buf)
+    if spinner_marks[buf] and spinner_marks[buf][line_0] then
+      pcall(vim.api.nvim_buf_del_extmark, buf, indicator_ns, spinner_marks[buf][line_0])
+      spinner_marks[buf][line_0] = nil
+    end
     local virt = build_virt_text("✓", "PosteSuccess", latency_ms, assertion_results)
     if #virt > 0 then
       vim.api.nvim_buf_set_extmark(buf, indicator_ns, line_0, 0, {
@@ -148,7 +151,10 @@ function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)
     end
 
   elseif status == "error" then
-    clear_all_virt_text(buf)
+    if spinner_marks[buf] and spinner_marks[buf][line_0] then
+      pcall(vim.api.nvim_buf_del_extmark, buf, indicator_ns, spinner_marks[buf][line_0])
+      spinner_marks[buf][line_0] = nil
+    end
     local virt = build_virt_text("✘", "PosteError", latency_ms, assertion_results)
     if #virt > 0 then
       vim.api.nvim_buf_set_extmark(buf, indicator_ns, line_0, 0, {
