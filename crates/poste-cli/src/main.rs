@@ -44,7 +44,13 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.version {
-        println!("poste {}", env!("POSTE_TAG"));
+        let tag = env!("POSTE_TAG");
+        let date = env!("POSTE_BUILD_DATE");
+        if date == "unknown" {
+            println!("poste {tag}");
+        } else {
+            println!("poste {tag} ({date})");
+        }
         return Ok(());
     }
 
