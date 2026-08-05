@@ -41,7 +41,7 @@ pub async fn execute(action: ConnectionAction) -> Result<()> {
             let store = ConnectionStore::load(&search_dir)?;
 
             // Load env vars for variable substitution display
-            let env_vars = crate::run::load_env_vars(&search_dir, &env);
+            let env_vars = crate::util::load_env_vars(&search_dir, &env);
 
             if json {
                 let list = store.to_json_list();
@@ -93,7 +93,7 @@ pub async fn execute(action: ConnectionAction) -> Result<()> {
             };
 
             let store = ConnectionStore::load(&search_dir)?;
-            let env_vars = crate::run::load_env_vars(&search_dir, &env);
+            let env_vars = crate::util::load_env_vars(&search_dir, &env);
 
             let config = store
                 .get(&name)

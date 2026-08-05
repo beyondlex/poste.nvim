@@ -4,12 +4,7 @@ use clap::{Parser, Subcommand};
 mod connection;
 mod context;
 mod exec_file;
-mod fmt;
-mod import;
 mod introspect;
-mod resolve;
-mod run;
-mod serve;
 mod util;
 
 #[derive(Parser)]
@@ -28,8 +23,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Execute a request at a specific line
-    Run(run::RunArgs),
     /// Manage SQL connections
     Connection {
         #[command(subcommand)]
@@ -42,17 +35,8 @@ enum Commands {
         #[command(subcommand)]
         action: context::ContextAction,
     },
-    /// Format .http/.rest files
-    Fmt(fmt::FmtArgs),
-    /// Import specs from external tools (OpenAPI, Swagger, Postman)
-    Import {
-        #[command(subcommand)]
-        source: import::ImportSource,
-    },
     /// Execute a SQL file with streaming progress
     ExecFile(exec_file::ExecFileArgs),
-    /// Resolve variables in a request block
-    Resolve(resolve::ResolveArgs),
 }
 
 #[tokio::main]
@@ -74,20 +58,8 @@ async fn main() -> Result<()> {
         Some(Commands::Context { action }) => {
             context::execute(action)?;
         }
-        Some(Commands::Run(args)) => {
-            run::execute(args).await?;
-        }
-        Some(Commands::Fmt(args)) => {
-            fmt::execute(args)?;
-        }
-        Some(Commands::Import { source }) => {
-            import::execute(source)?;
-        }
         Some(Commands::ExecFile(args)) => {
             exec_file::execute(args).await?;
-        }
-        Some(Commands::Resolve(args)) => {
-            resolve::execute(args)?;
         }
         None => {}
     }

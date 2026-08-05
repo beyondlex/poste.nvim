@@ -993,7 +993,7 @@ Authorization: {{token}}
     }
 
     #[test]
-    fn test_magic_var_randomInt() {
+    fn test_magic_var_random_int() {
         let parser = Parser::new(HashMap::new());
         let result = parser.substitute_vars("{{$randomInt}}", &HashMap::new(), &HashMap::new());
         let val: u64 = result.parse().unwrap();

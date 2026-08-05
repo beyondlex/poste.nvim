@@ -76,7 +76,10 @@ pub(super) fn timestamptz_fallback(
     b: Option<Vec<u8>>,
 ) -> Value {
     if let Some(v) = v {
-        json!(v.with_timezone(&chrono::Local).format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string())
+        json!(v
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%dT%H:%M:%S%.3f%:z")
+            .to_string())
     } else {
         string_fallback(s, b)
     }

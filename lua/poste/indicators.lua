@@ -34,7 +34,7 @@ function M.clear_all(buf)
 end
 
 --- Clear indicators for all lines except the current one.
-function M.clear_other_requests(buf, line_0)
+function M.clear_other_requests(buf, _line_0)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
   vim.api.nvim_buf_clear_namespace(buf, indicator_ns, 0, -1)
 end
@@ -104,10 +104,10 @@ function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)
 
     local frame = 1
     -- Place initial spinner virt_text
-    local virt = build_virt_text(spinner_frames[frame], "PosteSpinner", latency_ms, assertion_results)
-    if #virt > 0 then
+    local spinner_virt = build_virt_text(spinner_frames[frame], "PosteSpinner", latency_ms, assertion_results)
+    if #spinner_virt > 0 then
       local mark_id = vim.api.nvim_buf_set_extmark(buf, indicator_ns, line_0, 0, {
-        virt_text = virt,
+        virt_text = spinner_virt,
         virt_text_pos = "eol",
         hl_mode = "combine",
       })
@@ -122,10 +122,10 @@ function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)
       -- Delete old extmark and place a new one with updated spinner frame
       pcall(vim.api.nvim_buf_del_extmark, buf, indicator_ns, mark_id)
       frame = (frame % #spinner_frames) + 1
-      local virt = build_virt_text(spinner_frames[frame], "PosteSpinner", latency_ms, assertion_results)
-      if #virt > 0 then
+      local spinner_update_virt = build_virt_text(spinner_frames[frame], "PosteSpinner", latency_ms, assertion_results)
+      if #spinner_update_virt > 0 then
         local new_id = vim.api.nvim_buf_set_extmark(buf, indicator_ns, line_0, 0, {
-          virt_text = virt,
+          virt_text = spinner_update_virt,
           virt_text_pos = "eol",
           hl_mode = "combine",
         })
@@ -144,7 +144,7 @@ function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)
     local virt = build_virt_text("✓", "PosteSuccess", latency_ms, assertion_results)
     if #virt > 0 then
       vim.api.nvim_buf_set_extmark(buf, indicator_ns, line_0, 0, {
-        virt_text = virt,
+        virt_text = success_virt,
         virt_text_pos = "eol",
         hl_mode = "combine",
       })
@@ -158,7 +158,7 @@ function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)
     local virt = build_virt_text("✘", "PosteError", latency_ms, assertion_results)
     if #virt > 0 then
       vim.api.nvim_buf_set_extmark(buf, indicator_ns, line_0, 0, {
-        virt_text = virt,
+        virt_text = error_virt,
         virt_text_pos = "eol",
         hl_mode = "combine",
       })

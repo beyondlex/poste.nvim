@@ -3,6 +3,15 @@ use clap::Parser;
 use serde_json::json;
 use std::time::Instant;
 
+type StatementResult = (
+    Vec<serde_json::Value>,
+    Vec<Vec<serde_json::Value>>,
+    u64,
+    u64,
+    bool,
+    bool,
+);
+
 #[derive(Parser)]
 pub struct ExecFileArgs {
     /// Path to .sql file
@@ -48,9 +57,12 @@ where
         .map_err(|e| anyhow::anyhow!("File not found: {} ({})", abs_path.display(), e))?;
 
     let content = std::fs::read_to_string(&abs_path)?;
+    let search_dir = abs_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
 
     // Resolve connection URL: --connection arg (must be a URL, resolved by Lua)
-    let mut connection_url = resolve_connection(args, &content)?;
+    let mut connection_url = resolve_connection(args, &content, search_dir)?;
 
     // Apply --database override
     if let Some(ref db) = args.database {
@@ -62,10 +74,15 @@ where
         poste_core::Protocol::Sqlite
     } else if connection_url.starts_with("mysql://") {
         poste_core::Protocol::Mysql
-    } else if connection_url.starts_with("postgres://") || connection_url.starts_with("postgresql://") {
+    } else if connection_url.starts_with("postgres://")
+        || connection_url.starts_with("postgresql://")
+    {
         poste_core::Protocol::Postgres
     } else {
-        anyhow::bail!("Cannot determine protocol from connection URL: {}", connection_url);
+        anyhow::bail!(
+            "Cannot determine protocol from connection URL: {}",
+            connection_url
+        );
     };
 
     // Extract database from connection URL for display
@@ -124,16 +141,28 @@ struct ExecSummary {
     dialect: String,
 }
 
-fn resolve_connection(args: &ExecFileArgs, content: &str) -> Result<String> {
-    if let Some(ref conn) = args.connection {
-        return Ok(conn.clone());
-    }
-    if let Some(conn) = extract_connection_directive(content) {
+fn resolve_connection(
+    args: &ExecFileArgs,
+    content: &str,
+    search_dir: &std::path::Path,
+) -> Result<String> {
+    let conn = if let Some(ref conn) = args.connection {
+        conn.clone()
+    } else if let Some(conn) = extract_connection_directive(content) {
+        conn
+    } else {
+        anyhow::bail!(
+            "No connection specified. Use --connection <url> or add -- @connection <url> to the SQL file."
+        )
+    };
+
+    if crate::util::is_connection_url(&conn) {
         return Ok(conn);
     }
-    anyhow::bail!(
-        "No connection specified. Use --connection <url> or add -- @connection <url> to the SQL file."
-    )
+
+    let store = poste_exec::sql_connection::ConnectionStore::load(search_dir)?;
+    let env_vars = crate::util::load_env_vars(search_dir, &args.env);
+    store.resolve(&conn, &env_vars)
 }
 
 fn extract_connection_directive(content: &str) -> Option<String> {
@@ -186,6 +215,7 @@ fn strip_sql_directives(content: &str) -> String {
         .join("\n")
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_statements<F>(
     protocol: &poste_core::Protocol,
     connection_url: &str,
@@ -277,6 +307,7 @@ where
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn exec_sqlite<F>(
     connection_url: &str,
     statements: &[String],
@@ -298,7 +329,7 @@ where
     let conn_str = poste_exec::sql_connection::normalize_sqlite_connection(connection_url)?;
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
-.connect(&conn_str)
+        .connect(&conn_str)
         .await
         .map_err(|e| anyhow::anyhow!("SQLite connection failed: {}", e))?;
     let mut conn = pool.acquire().await?;
@@ -329,7 +360,7 @@ where
         let stmt_start = Instant::now();
         let upper = stmt_trimmed.to_uppercase();
 
-        let stmt_result: anyhow::Result<(Vec<serde_json::Value>, Vec<Vec<serde_json::Value>>, u64, u64, bool, bool)> = async {
+        let stmt_result: anyhow::Result<StatementResult> = async {
             if upper.starts_with("SELECT")
                 || upper.starts_with("WITH")
                 || upper.starts_with("EXPLAIN")
@@ -352,28 +383,38 @@ where
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 let row_count = rows.len() as u64;
 
-                let truncated = if max_rows > 0 && row_count > max_rows {
-                    true
-                } else {
-                    false
-                };
+                let truncated = max_rows > 0 && row_count > max_rows;
                 let display_rows = if max_rows > 0 {
                     std::cmp::min(row_count, max_rows) as usize
                 } else {
                     row_count as usize
                 };
 
-                let col_types: Vec<String> = rows.first()
-                    .map(|first_row| first_row.columns().iter().map(|col| col.type_info().name().to_string()).collect())
+                let col_types: Vec<String> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| col.type_info().name().to_string())
+                            .collect()
+                    })
                     .unwrap_or_default();
 
-                let columns: Vec<serde_json::Value> = rows.first()
-                    .map(|first_row| first_row.columns().iter().map(|col| {
-                        json!({
-                            "name": col.name(),
-                            "type": col.type_info().name(),
-                        })
-                    }).collect())
+                let columns: Vec<serde_json::Value> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| {
+                                json!({
+                                    "name": col.name(),
+                                    "type": col.type_info().name(),
+                                })
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
 
                 let json_rows: Vec<Vec<serde_json::Value>> = rows
@@ -381,7 +422,9 @@ where
                     .take(display_rows)
                     .map(|row| {
                         (0..row.len())
-                            .map(|i| sqlite_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
+                            .map(|i| {
+                                sqlite_value_to_json(row, i, col_types.get(i).map_or("", |s| s))
+                            })
                             .collect()
                     })
                     .collect();
@@ -458,6 +501,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn exec_postgres<F>(
     connection_url: &str,
     statements: &[String],
@@ -509,7 +553,7 @@ where
         let stmt_start = Instant::now();
         let upper = stmt_trimmed.to_uppercase();
 
-        let stmt_result: anyhow::Result<(Vec<serde_json::Value>, Vec<Vec<serde_json::Value>>, u64, u64, bool, bool)> = async {
+        let stmt_result: anyhow::Result<StatementResult> = async {
             if upper.starts_with("SELECT")
                 || upper.starts_with("WITH")
                 || upper.starts_with("EXPLAIN")
@@ -533,30 +577,49 @@ where
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 let row_count = rows.len() as u64;
 
-                let truncated = if max_rows > 0 && row_count > max_rows { true } else { false };
+                let truncated = max_rows > 0 && row_count > max_rows;
                 let display_rows = if max_rows > 0 {
                     std::cmp::min(row_count, max_rows) as usize
                 } else {
                     row_count as usize
                 };
 
-                let col_types: Vec<String> = rows.first()
-                    .map(|first_row| first_row.columns().iter().map(|col| col.type_info().name().to_string()).collect())
+                let col_types: Vec<String> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| col.type_info().name().to_string())
+                            .collect()
+                    })
                     .unwrap_or_default();
 
-                let columns: Vec<serde_json::Value> = rows.first()
-                    .map(|first_row| first_row.columns().iter().map(|col| {
-                        json!({
-                            "name": col.name(),
-                            "type": col.type_info().name(),
-                            "nullable": col.type_info().name() != "BOOL",
-                        })
-                    }).collect())
+                let columns: Vec<serde_json::Value> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| {
+                                json!({
+                                    "name": col.name(),
+                                    "type": col.type_info().name(),
+                                    "nullable": col.type_info().name() != "BOOL",
+                                })
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
 
                 let json_rows: Vec<Vec<serde_json::Value>> = rows
-                    .iter().take(display_rows)
-                    .map(|row| (0..row.len()).map(|i| pg_value_to_json(row, i, col_types.get(i).map_or("", |s| s))).collect())
+                    .iter()
+                    .take(display_rows)
+                    .map(|row| {
+                        (0..row.len())
+                            .map(|i| pg_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
+                            .collect()
+                    })
                     .collect();
 
                 Ok((columns, json_rows, row_count, elapsed, truncated, false))
@@ -576,7 +639,8 @@ where
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true))
             }
-        }.await;
+        }
+        .await;
 
         match stmt_result {
             Ok((columns, json_rows, row_count, elapsed, truncated, _is_dml)) => {
@@ -602,7 +666,9 @@ where
                     "sql": stmt_trimmed, "error": format!("{}", e), "execution_time_ms": 0,
                 });
                 emit(&result_obj.to_string());
-                if mode == "transaction" { break; }
+                if mode == "transaction" {
+                    break;
+                }
             }
         }
     }
@@ -615,6 +681,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn exec_mysql<F>(
     connection_url: &str,
     statements: &[String],
@@ -643,7 +710,8 @@ where
 
     let mut in_transaction = false;
     if mode == "transaction" {
-        conn.execute("SET autocommit = 0").await
+        conn.execute("SET autocommit = 0")
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to disable autocommit: {}", e))?;
         in_transaction = true;
     }
@@ -667,7 +735,7 @@ where
         let stmt_start = Instant::now();
         let upper = stmt_trimmed.to_uppercase();
 
-        let stmt_result: anyhow::Result<(Vec<serde_json::Value>, Vec<Vec<serde_json::Value>>, u64, u64, bool, bool)> = async {
+        let stmt_result: anyhow::Result<StatementResult> = async {
             if upper.starts_with("SELECT")
                 || upper.starts_with("WITH")
                 || upper.starts_with("EXPLAIN")
@@ -691,24 +759,38 @@ where
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 let row_count = rows.len() as u64;
 
-                let truncated = if max_rows > 0 && row_count > max_rows { true } else { false };
+                let truncated = max_rows > 0 && row_count > max_rows;
                 let display_rows = if max_rows > 0 {
                     std::cmp::min(row_count, max_rows) as usize
                 } else {
                     row_count as usize
                 };
 
-                let col_types: Vec<String> = rows.first()
-                    .map(|first_row| first_row.columns().iter().map(|col| col.type_info().name().to_string()).collect())
+                let col_types: Vec<String> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| col.type_info().name().to_string())
+                            .collect()
+                    })
                     .unwrap_or_default();
 
-                let columns: Vec<serde_json::Value> = rows.first()
-                    .map(|first_row| first_row.columns().iter().map(|col| {
-                        json!({
-                            "name": col.name(),
-                            "type": col.type_info().name(),
-                        })
-                    }).collect())
+                let columns: Vec<serde_json::Value> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| {
+                                json!({
+                                    "name": col.name(),
+                                    "type": col.type_info().name(),
+                                })
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
 
                 let json_rows: Vec<Vec<serde_json::Value>> = rows
@@ -716,7 +798,9 @@ where
                     .take(display_rows)
                     .map(|row| {
                         (0..row.len())
-                            .map(|i| mysql_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
+                            .map(|i| {
+                                mysql_value_to_json(row, i, col_types.get(i).map_or("", |s| s))
+                            })
                             .collect()
                     })
                     .collect();
@@ -738,7 +822,8 @@ where
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true))
             }
-        }.await;
+        }
+        .await;
 
         match stmt_result {
             Ok((columns, json_rows, row_count, elapsed, truncated, _is_dml)) => {
@@ -764,7 +849,9 @@ where
                     "sql": stmt_trimmed, "error": format!("{}", e), "execution_time_ms": 0,
                 });
                 emit(&result_obj.to_string());
-                if mode == "transaction" { break; }
+                if mode == "transaction" {
+                    break;
+                }
             }
         }
     }
@@ -780,7 +867,11 @@ where
     Ok(())
 }
 
-fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize, _col_type: &str) -> serde_json::Value {
+fn sqlite_value_to_json(
+    row: &sqlx::sqlite::SqliteRow,
+    idx: usize,
+    _col_type: &str,
+) -> serde_json::Value {
     use sqlx::{Row, ValueRef};
 
     if let Ok(raw) = row.try_get_raw(idx) {
@@ -814,13 +905,23 @@ fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize, _col_type: &s
 fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> serde_json::Value {
     use sqlx::{Row, ValueRef};
     if let Ok(raw) = row.try_get_raw(idx) {
-        if raw.is_null() { return serde_json::Value::Null; }
+        if raw.is_null() {
+            return serde_json::Value::Null;
+        }
     }
-    if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) { return json!(v); }
-    if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) { return json!(v); }
-    if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) { return json!(v); }
+    if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
+        return json!(v);
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
+        return json!(v);
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) {
+        return json!(v);
+    }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) { return parsed; }
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) {
+            return parsed;
+        }
         let upper = col_type.to_uppercase();
         if upper == "TIMESTAMPTZ" || upper == "TIMESTAMP WITH TIME ZONE" {
             if let Ok(dt) = v.parse::<chrono::DateTime<chrono::Utc>>() {
@@ -838,16 +939,30 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> 
     serde_json::Value::Null
 }
 
-fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col_type: &str) -> serde_json::Value {
+fn mysql_value_to_json(
+    row: &sqlx::mysql::MySqlRow,
+    idx: usize,
+    col_type: &str,
+) -> serde_json::Value {
     use sqlx::{Row, ValueRef};
     if let Ok(raw) = row.try_get_raw(idx) {
-        if raw.is_null() { return serde_json::Value::Null; }
+        if raw.is_null() {
+            return serde_json::Value::Null;
+        }
     }
-    if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) { return json!(v); }
-    if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) { return json!(v); }
-    if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) { return json!(v); }
+    if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
+        return json!(v);
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
+        return json!(v);
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) {
+        return json!(v);
+    }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) { return parsed; }
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) {
+            return parsed;
+        }
         let upper = col_type.to_uppercase();
         if upper == "TIMESTAMP" || upper == "TIMESTAMP WITHOUT TIME ZONE" {
             if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&v, "%Y-%m-%d %H:%M:%S%.f") {
@@ -860,7 +975,9 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col_type: &str) 
     }
     if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
         let s = String::from_utf8_lossy(&v);
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) { return parsed; }
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
+            return parsed;
+        }
         return json!(s.to_string());
     }
     serde_json::Value::Null
@@ -929,7 +1046,11 @@ SELECT * FROM t ORDER BY x;
         // Actually, the progress events are emitted before each result
         // But we need to check: USE statements are skipped
         // No USE statements in this file, so 4 statements → 4 progress + 4 result + 1 summary = 9
-        assert!(events.len() >= 9, "Expected at least 9 events, got {}", events.len());
+        assert!(
+            events.len() >= 9,
+            "Expected at least 9 events, got {}",
+            events.len()
+        );
 
         // Check summary
         let summary = &events[events.len() - 1];
@@ -1058,8 +1179,14 @@ SELECT 1;
         // The error result should have "error" field
         let result_events: Vec<&serde_json::Value> =
             events.iter().filter(|e| e["type"] == "result").collect();
-        let error_result = result_events.iter().find(|e| e["status"] == "error").unwrap();
-        assert!(error_result["error"].as_str().unwrap().contains("no such table"));
+        let error_result = result_events
+            .iter()
+            .find(|e| e["status"] == "error")
+            .unwrap();
+        assert!(error_result["error"]
+            .as_str()
+            .unwrap()
+            .contains("no such table"));
     }
 
     #[test]
@@ -1164,6 +1291,10 @@ SELECT 1;
         let result = rt.block_on(async { exec_file(&args, |_| {}).await });
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("No SQL statements") || err.contains("No statements"), "Error: {}", err);
+        assert!(
+            err.contains("No SQL statements") || err.contains("No statements"),
+            "Error: {}",
+            err
+        );
     }
 }

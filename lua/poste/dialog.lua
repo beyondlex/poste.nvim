@@ -7,8 +7,8 @@ local backdrop_buf = nil
 local backdrop_win = nil
 
 local function setup_hl()
-  vim.api.nvim_set_hl(0, "PosteBackdrop", { bg = 0x000000, blend = 60 })
-  vim.api.nvim_set_hl(0, "PosteProgressBar", { fg = 0x5c6370 })
+  vim.api.nvim_set_hl(0, "PosteCoreBackdrop", { bg = 0x000000, blend = 60 })
+  vim.api.nvim_set_hl(0, "PosteCoreProgressBar", { fg = 0x5c6370 })
 end
 setup_hl()
 vim.api.nvim_create_autocmd("ColorScheme", { callback = setup_hl })
@@ -32,7 +32,7 @@ local function ensure_backdrop()
     zindex = 49,
     focusable = false,
   })
-  vim.wo[backdrop_win].winhl = "Normal:PosteBackdrop"
+  vim.wo[backdrop_win].winhl = "Normal:PosteCoreBackdrop"
   vim.wo[backdrop_win].winblend = 60
 end
 

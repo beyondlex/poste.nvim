@@ -7,13 +7,13 @@ local function get_state()
 end
 
 local function setup_hl()
-  vim.api.nvim_set_hl(0, "PosteLayoutSectionTitle", { fg = 0x7dcfff, bold = true })
-  vim.api.nvim_set_hl(0, "PosteLayoutParagraph",   { fg = 0x565f89 })
-  vim.api.nvim_set_hl(0, "PosteLayoutKey",          { fg = 0x98c379, bold = true })
-  vim.api.nvim_set_hl(0, "PosteLayoutValue",        { fg = 0xa9b1d6 })
+  vim.api.nvim_set_hl(0, "PosteCoreLayoutSectionTitle", { fg = 0x7dcfff, bold = true })
+  vim.api.nvim_set_hl(0, "PosteCoreLayoutParagraph",   { fg = 0x565f89 })
+  vim.api.nvim_set_hl(0, "PosteCoreLayoutKey",          { fg = 0x98c379, bold = true })
+  vim.api.nvim_set_hl(0, "PosteCoreLayoutValue",        { fg = 0xa9b1d6 })
   get_state().apply_highlight_overrides({
-    "PosteLayoutSectionTitle", "PosteLayoutParagraph",
-    "PosteLayoutKey", "PosteLayoutValue",
+    "PosteCoreLayoutSectionTitle", "PosteCoreLayoutParagraph",
+    "PosteCoreLayoutKey", "PosteCoreLayoutValue",
   })
 end
 setup_hl()
@@ -54,8 +54,8 @@ end
 ---@return string
 local function pad(text, width)
   local dw = vim.fn.strdisplaywidth(text)
-  local pad = math.max(0, width - dw)
-  return text .. string.rep(" ", pad)
+  local padding = math.max(0, width - dw)
+  return text .. string.rep(" ", padding)
 end
 M.pad = pad
 
@@ -223,13 +223,13 @@ end
 ---@param opts table
 ---  - text: string
 ---  - indent: number? (default 2)
----  - hl: string? (default "PosteLayoutSectionTitle", highlight group name)
+---  - hl: string? (default "PosteCoreLayoutSectionTitle", highlight group name)
 ---@return { lines: string[], highlights: table[] }
 function M.section_title(opts)
   opts = opts or {}
   local text = opts.text or ""
   local indent = opts.indent or 2
-  local hl = opts.hl or "PosteLayoutSectionTitle"
+  local hl = opts.hl or "PosteCoreLayoutSectionTitle"
   local prefix = string.rep(" ", indent)
   local line = prefix .. text
   local dw = vim.fn.strdisplaywidth(text)
@@ -245,7 +245,7 @@ end
 ---  - max_width: number (container width)
 ---  - indent: number? (default 4)
 ---  - auto_wrap: boolean? (default true)
----  - hl: string? (default "PosteLayoutParagraph", highlight group name)
+---  - hl: string? (default "PosteCoreLayoutParagraph", highlight group name)
 ---@return { lines: string[], highlights: table[] }
 function M.paragraph(opts)
   opts = opts or {}
@@ -253,7 +253,7 @@ function M.paragraph(opts)
   local max_width = opts.max_width or 60
   local indent = opts.indent or 4
   local auto_wrap = opts.auto_wrap ~= false
-  local hl = opts.hl or "PosteLayoutParagraph"
+  local hl = opts.hl or "PosteCoreLayoutParagraph"
   local prefix = string.rep(" ", indent)
   local max_line = max_width - indent
 
@@ -283,16 +283,16 @@ end
 --- Keymap hint bar. Each entry is rendered as `[key label]`.
 ---@param opts table
 ---  - mapping: { key: string, label: string }[] (ordered list of key-label pairs)
----  - key_hl: string? (default "PosteLayoutKey", highlight group for key)
----  - value_hl: string? (default "PosteLayoutValue", highlight group for label)
+---  - key_hl: string? (default "PosteCoreLayoutKey", highlight group for key)
+---  - value_hl: string? (default "PosteCoreLayoutValue", highlight group for label)
 ---  - indent: number? (default 4)
 ---  - sep: string? (default "  ", separator between entries)
 ---@return { lines: string[], highlights: table[] }
 function M.keymaps(opts)
   opts = opts or {}
   local mapping = opts.mapping or {}
-  local key_hl = opts.key_hl or "PosteLayoutKey"
-  local value_hl = opts.value_hl or "PosteLayoutValue"
+  local key_hl = opts.key_hl or "PosteCoreLayoutKey"
+  local value_hl = opts.value_hl or "PosteCoreLayoutValue"
   local indent = opts.indent or 4
   local sep = opts.sep or "  "
   local prefix = string.rep(" ", indent)

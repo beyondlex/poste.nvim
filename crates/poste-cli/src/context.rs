@@ -22,8 +22,6 @@ pub enum ContextAction {
     },
     /// Find ALL statement boundary line ranges in the given text
     StmtRanges,
-    /// Persistent server mode: read line-delimited JSON requests from stdin
-    Serve,
 }
 
 #[derive(Serialize)]
@@ -133,9 +131,6 @@ pub fn execute(action: ContextAction) -> Result<()> {
             let lines: Vec<&str> = input.lines().collect();
             let ranges = sql_context::find_all_statement_ranges(&lines);
             println!("{}", serde_json::to_string(&ranges)?);
-        }
-        ContextAction::Serve => {
-            crate::serve::handle_serve()?;
         }
     }
 

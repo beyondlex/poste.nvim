@@ -134,7 +134,10 @@ pub(super) async fn introspect_mysql(params: &IntrospectParams) -> Result<Value>
             let table = params.table.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("table parameter required for table_info introspection")
             })?;
-            let sql = format!("SHOW TABLE STATUS WHERE `Name` = '{}'", table.replace('\'', "''"));
+            let sql = format!(
+                "SHOW TABLE STATUS WHERE `Name` = '{}'",
+                table.replace('\'', "''")
+            );
             let rows = sqlx::query(&sql).fetch_all(&pool).await?;
             let mut items = Vec::new();
             for row in &rows {
