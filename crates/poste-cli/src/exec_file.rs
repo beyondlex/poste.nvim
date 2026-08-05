@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use rust_decimal::prelude::FromPrimitive;
 use serde_json::json;
 use std::time::Instant;
 
@@ -906,12 +907,93 @@ fn sqlite_value_to_json(
 
 fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> serde_json::Value {
     use sqlx::{Row, ValueRef};
+
     if let Ok(raw) = row.try_get_raw(idx) {
         if raw.is_null() {
             return serde_json::Value::Null;
         }
     }
+
+    let upper = col_type.to_uppercase();
+    match upper.as_str() {
+        "NUMERIC" => {
+            if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(idx) {
+                return match v.to_string().parse::<f64>() {
+                    Ok(n) if rust_decimal::Decimal::from_f64(n) == Some(v) => {
+                        json!(n)
+                    }
+                    _ => json!(v.to_string()),
+                };
+            }
+            return serde_json::Value::Null;
+        }
+        "DATE" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx)
+            {
+                return json!(v.format("%Y-%m-%d").to_string());
+            }
+        }
+        "TIMESTAMP" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx)
+            {
+                return json!(v.format("%Y-%m-%d %H:%M:%S%.3f").to_string());
+            }
+        }
+        "TIMESTAMPTZ" | "TIMESTAMP WITH TIME ZONE" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(
+                    idx,
+                ) {
+                let local = v.with_timezone(&chrono::Local);
+                return json!(local.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string());
+            }
+        }
+        "TIME" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx)
+            {
+                return json!(v.format("%H:%M:%S%.3f").to_string());
+            }
+        }
+        "UUID" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::uuid::Uuid>, _>(idx)
+            {
+                return json!(v.to_string());
+            }
+        }
+        "INET" | "CIDR" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::ipnetwork::IpNetwork>, _>(idx)
+            {
+                return json!(v.to_string());
+            }
+        }
+        "JSON" | "JSONB" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx)
+            {
+                return v.0;
+            }
+            if let Ok(Some(s)) = row.try_get::<Option<String>, _>(idx) {
+                return serde_json::from_str(&s).unwrap_or(json!(s));
+            }
+            return serde_json::Value::Null;
+        }
+        _ => {}
+    }
+
     if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
+        if upper == "INT8" || upper == "BIGINT" {
+            let max_safe: i64 = 9_007_199_254_740_992;
+            if v > -max_safe && v < max_safe {
+                return json!(v);
+            } else {
+                return json!(v.to_string());
+            }
+        }
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
@@ -924,7 +1006,7 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> 
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) {
             return parsed;
         }
-        let upper = col_type.to_uppercase();
+        // TIMESTAMPTZ string fallback (for types that report as string)
         if upper == "TIMESTAMPTZ" || upper == "TIMESTAMP WITH TIME ZONE" {
             if let Ok(dt) = v.parse::<chrono::DateTime<chrono::Utc>>() {
                 let local = dt.with_timezone(&chrono::Local);
@@ -947,11 +1029,94 @@ fn mysql_value_to_json(
     col_type: &str,
 ) -> serde_json::Value {
     use sqlx::{Row, ValueRef};
+
     if let Ok(raw) = row.try_get_raw(idx) {
         if raw.is_null() {
             return serde_json::Value::Null;
         }
     }
+
+    let upper = col_type.to_uppercase();
+    match upper.as_str() {
+        "DECIMAL" | "DEC" | "NUMERIC" | "FIXED" => {
+            if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(idx) {
+                return match v.to_string().parse::<f64>() {
+                    Ok(n) if rust_decimal::Decimal::from_f64(n) == Some(v) => {
+                        json!(n)
+                    }
+                    _ => json!(v.to_string()),
+                };
+            }
+            return serde_json::Value::Null;
+        }
+        "DATE" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx)
+            {
+                return json!(v.format("%Y-%m-%d").to_string());
+            }
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx)
+            {
+                return json!(v.format("%Y-%m-%d").to_string());
+            }
+        }
+        "DATETIME" | "DATETIME2" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx)
+            {
+                return json!(v.format("%Y-%m-%d %H:%M:%S%.3f").to_string());
+            }
+        }
+        "TIMESTAMP" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(
+                    idx,
+                ) {
+                let local = v.with_timezone(&chrono::Local);
+                return json!(local.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string());
+            }
+        }
+        "TIME" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx)
+            {
+                return json!(v.format("%H:%M:%S%.3f").to_string());
+            }
+        }
+        "JSON" => {
+            if let Ok(Some(v)) =
+                row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx)
+            {
+                return v.0;
+            }
+            if let Ok(Some(s)) = row.try_get::<Option<String>, _>(idx) {
+                return serde_json::from_str(&s).unwrap_or(json!(s));
+            }
+            if let Ok(Some(b)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
+                let s = String::from_utf8_lossy(&b);
+                return serde_json::from_str(&s).unwrap_or(json!(s.to_string()));
+            }
+            return serde_json::Value::Null;
+        }
+        "BIGINT" => {
+            if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
+                let max_safe: i64 = 9_007_199_254_740_992;
+                if v > -max_safe && v < max_safe {
+                    return json!(v);
+                } else {
+                    return json!(v.to_string());
+                }
+            }
+        }
+        "BIGINT UNSIGNED" => {
+            if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(idx) {
+                return json!(v.to_string());
+            }
+        }
+        _ => {}
+    }
+
     if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
         return json!(v);
     }
@@ -965,7 +1130,7 @@ fn mysql_value_to_json(
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) {
             return parsed;
         }
-        let upper = col_type.to_uppercase();
+        // TIMESTAMP string fallback (for types that report as string)
         if upper == "TIMESTAMP" || upper == "TIMESTAMP WITHOUT TIME ZONE" {
             if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&v, "%Y-%m-%d %H:%M:%S%.f") {
                 let utc = dt.and_utc();

@@ -23,6 +23,7 @@ clap.workspace = true
 regex.workspace = true
 sqlx.workspace = true
 chrono.workspace = true
+rust_decimal.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
