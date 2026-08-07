@@ -98,8 +98,14 @@ M.config = {
 M.current_env = M.config.default_env
 M._sql_session = nil
 
-local ok, sql_state = pcall(require, "poste-sql.state")
-if ok then M.sql = sql_state end
+-- Defer SQL state loading to avoid circular dependency during poste-sql.nvim config
+setmetatable(M, { __index = function(t, k)
+  if k == "sql" then
+    local ok, sql_state = pcall(require, "poste-sql.state")
+    if ok then rawset(t, "sql", sql_state); return sql_state end
+    return nil
+  end
+end })
 
 local KEY_DISPLAY_NAMES = {
   ["<Tab>"] = "Tab",
