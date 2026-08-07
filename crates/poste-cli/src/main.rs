@@ -5,6 +5,7 @@ mod connection;
 mod context;
 mod exec_file;
 mod introspect;
+mod session;
 mod util;
 
 #[derive(Parser)]
@@ -37,6 +38,8 @@ enum Commands {
     },
     /// Execute a SQL file with streaming progress
     ExecFile(exec_file::ExecFileArgs),
+    /// Persistent SQL session (keeps connection alive across requests)
+    Session(session::SessionArgs),
 }
 
 #[tokio::main]
@@ -66,6 +69,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::ExecFile(args)) => {
             exec_file::execute(args).await?;
+        }
+        Some(Commands::Session(args)) => {
+            session::execute(args).await?;
         }
         None => {}
     }
