@@ -11,6 +11,7 @@ M.config = {
   max_body_lines = 500,
   body_preview_lines = 20,
   sql_formatters = { "sqlfluff", "sqlfmt", "sql-formatter", "pg_format" },
+  hide_empty_result_tabs = true,
   db_browser = {
     split_position = "left",  -- "left" or "right"
     split_width = 40,
