@@ -3,6 +3,28 @@ use clap::Parser;
 
 use poste_exec::sql_connection::{test_connection, ConnectionStore};
 
+/// Mask the password portion of a connection URL for safe display.
+/// `postgres://user:secret@host/db` → `postgres://user:****@host/db`.
+fn mask_url_password(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let rest = &url[scheme_end + 3..];
+    let Some(at) = rest.find('@') else {
+        return url.to_string();
+    };
+    let userinfo = &rest[..at];
+    let Some(colon) = userinfo.rfind(':') else {
+        return url.to_string();
+    };
+    format!(
+        "{}{}:****{}",
+        &url[..scheme_end + 3],
+        &userinfo[..colon],
+        &rest[at..]
+    )
+}
+
 #[derive(Parser)]
 pub enum ConnectionAction {
     /// List all connections from connections.json
@@ -81,7 +103,7 @@ pub async fn execute(action: ConnectionAction) -> Result<()> {
 
                     // Show resolved URL
                     if let Ok(url) = store.resolve(name, &env_vars) {
-                        println!("    → {}", url);
+                        println!("    → {}", mask_url_password(&url));
                     }
                 }
             }
@@ -132,4 +154,37 @@ pub async fn execute(action: ConnectionAction) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_url_password;
+
+    #[test]
+    fn masks_password_but_keeps_rest() {
+        assert_eq!(
+            mask_url_password("postgres://alice:secret@db.example.com:5432/myapp"),
+            "postgres://alice:****@db.example.com:5432/myapp"
+        );
+    }
+
+    #[test]
+    fn leaves_urls_without_password_unchanged() {
+        assert_eq!(
+            mask_url_password("postgres://alice@db.example.com:5432/myapp"),
+            "postgres://alice@db.example.com:5432/myapp"
+        );
+        assert_eq!(
+            mask_url_password("sqlite:./data/app.db?mode=rwc"),
+            "sqlite:./data/app.db?mode=rwc"
+        );
+    }
+
+    #[test]
+    fn masks_encoded_passwords_too() {
+        assert_eq!(
+            mask_url_password("postgres://alice:p%40ss@db.example.com/myapp"),
+            "postgres://alice:****@db.example.com/myapp"
+        );
+    }
 }
