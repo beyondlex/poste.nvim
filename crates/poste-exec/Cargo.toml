@@ -19,3 +19,4 @@ chrono = "0.4"
 # SQL (PostgreSQL, MySQL, SQLite)
 sqlx.workspace = true
 rust_decimal.workspace = true
+percent-encoding = "2"

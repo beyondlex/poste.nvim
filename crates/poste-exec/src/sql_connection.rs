@@ -4,10 +4,45 @@
 //! up the directory tree from the SQL file's location (same as env.json).
 
 use anyhow::Result;
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use poste_core::substitute_vars;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// Percent-encode userinfo (user/password) per RFC 3986: every byte outside
+/// the unreserved set (`A-Za-z0-9-._~`) is encoded, including non-ASCII UTF-8.
+/// Decoded again by URL parsers, so raw config values always round-trip.
+const USERINFO_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'!')
+    .add(b'"')
+    .add(b'#')
+    .add(b'$')
+    .add(b'%')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b'+')
+    .add(b',')
+    .add(b'/')
+    .add(b':')
+    .add(b';')
+    .add(b'<')
+    .add(b'=')
+    .add(b'>')
+    .add(b'?')
+    .add(b'@')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}');
 
 /// Normalize a SQLite connection string to `sqlite:<path>` format.
 /// Handles `sqlite:///`, `sqlite://`, `sqlite:`, plain paths, and `:memory:`.
@@ -101,8 +136,12 @@ impl ConnectionConfig {
                 let db = self.database.as_deref().unwrap_or("");
 
                 let auth = match (&self.user, &self.password) {
-                    (Some(u), Some(p)) => format!("{}:{}@", u, p),
-                    (Some(u), None) => format!("{}@", u),
+                    (Some(u), Some(p)) => format!(
+                        "{}:{}@",
+                        utf8_percent_encode(u, USERINFO_ENCODE_SET),
+                        utf8_percent_encode(p, USERINFO_ENCODE_SET)
+                    ),
+                    (Some(u), None) => format!("{}@", utf8_percent_encode(u, USERINFO_ENCODE_SET)),
                     _ => String::new(),
                 };
 
@@ -298,6 +337,44 @@ mod tests {
         assert_eq!(
             config.to_url(),
             "postgres://admin:secret@localhost:5432/myapp"
+        );
+    }
+
+    #[test]
+    fn test_connection_config_url_encodes_special_chars() {
+        let config = ConnectionConfig {
+            dialect: "postgres".to_string(),
+            host: Some("localhost".to_string()),
+            port: Some(5432),
+            database: Some("blog".to_string()),
+            user: Some("alice".to_string()),
+            password: Some("p@ss:w/rd%".to_string()),
+            path: None,
+            ssl_mode: None,
+            extra_params: HashMap::new(),
+        };
+        assert_eq!(
+            config.to_url(),
+            "postgres://alice:p%40ss%3Aw%2Frd%25@localhost:5432/blog"
+        );
+    }
+
+    #[test]
+    fn test_connection_config_url_encodes_user() {
+        let config = ConnectionConfig {
+            dialect: "postgres".to_string(),
+            host: Some("localhost".to_string()),
+            port: Some(5432),
+            database: Some("blog".to_string()),
+            user: Some("user@example.com".to_string()),
+            password: Some("pw".to_string()),
+            path: None,
+            ssl_mode: None,
+            extra_params: HashMap::new(),
+        };
+        assert_eq!(
+            config.to_url(),
+            "postgres://user%40example.com:pw@localhost:5432/blog"
         );
     }
 

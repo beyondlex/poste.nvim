@@ -1140,6 +1140,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "percent-encoding",
  "poste-core",
  "rust_decimal",
  "serde",
