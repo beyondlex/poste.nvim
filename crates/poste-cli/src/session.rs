@@ -524,6 +524,12 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> 
         _ => {}
     }
 
+    if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(idx) {
+        return json!(v);
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<i16>, _>(idx) {
+        return json!(v);
+    }
     if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
         if upper == "INT8" || upper == "BIGINT" {
             let max_safe: i64 = 9_007_199_254_740_992;
