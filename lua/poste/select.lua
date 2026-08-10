@@ -42,12 +42,16 @@ local function pick_snacks(items, prompt, on_select)
     {
       prompt = prompt or 'Select items:',
       layout = 'select',
-      format_item = function(item)
-        local text = item.text
-        if item.description and item.description ~= "" then
-          text = text .. "  " .. item.description
+      format_item = function(item, supports_chunks)
+        if supports_chunks then
+          local ret = { { item.text } }
+          if item.description and item.description ~= "" then
+            ret[#ret + 1] = { "  " .. item.description, "SnacksPickerComment" }
+          end
+          return ret
         end
-        return text
+        -- Search text: only the main name, not the description.
+        return item.text
       end,
       close = function()
         if not resolved then
@@ -105,7 +109,7 @@ local function pick_float(items, prompt, on_select)
     for _, item in ipairs(filtered) do
       local label = item.name
       if item.description ~= "" then
-        label = label .. "  (" .. item.description .. ")"
+        label = label .. "  " .. item.description
       end
       table.insert(display, label)
     end
@@ -120,6 +124,22 @@ local function pick_float(items, prompt, on_select)
     if selected_idx > 0 and selected_idx <= #filtered then
       vim.api.nvim_buf_add_highlight(list_buf, -1, "Visual", selected_idx, 0, -1)
     end
+    -- Highlight description in gray
+    for idx, item in ipairs(filtered) do
+      if item.description and item.description ~= "" then
+        local line = lines[idx + 1] or ""
+        local desc_start = line:find("  " .. item.description, 1, true)
+        if desc_start then
+          vim.api.nvim_buf_set_extmark(list_buf, -1, idx, desc_start - 1, {
+            end_row = idx,
+            end_col = desc_start - 1 + #item.description,
+            hl_group = "Comment",
+            hl_mode = "combine",
+            priority = 50,
+          })
+        end
+      end
+    end
   end
 
   local function filter_items()
@@ -130,8 +150,7 @@ local function pick_float(items, prompt, on_select)
     else
       local lower = search_text:lower()
       for _, item in ipairs(items) do
-        if item.name:lower():find(lower, 1, true)
-          or item.description:lower():find(lower, 1, true) then
+        if item.name:lower():find(lower, 1, true) then
           table.insert(filtered, item)
         end
       end
@@ -182,7 +201,7 @@ local function pick_vimui(items, prompt, on_select)
     prompt = prompt,
     format_item = function(item)
       if item.description ~= "" then
-        return item.name .. "  (" .. item.description .. ")"
+        return item.name .. "  " .. item.description
       end
       return item.name
     end,
