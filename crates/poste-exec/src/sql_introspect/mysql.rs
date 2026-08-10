@@ -130,6 +130,29 @@ pub(super) async fn introspect_mysql(params: &IntrospectParams) -> Result<Value>
         IntrospectType::Ddl => {
             build_create_table_from_introspect_mysql(&pool, params.table.as_deref()).await?
         }
+        IntrospectType::DatabaseInfo => {
+            let sql = "\
+                SELECT DATABASE() AS name, \
+                       DEFAULT_CHARACTER_SET_NAME AS charset, \
+                       DEFAULT_COLLATION_NAME AS collation, \
+                       (SELECT COUNT(*) FROM information_schema.tables \
+                        WHERE table_schema = DATABASE()) AS table_count, \
+                       (SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) \
+                        FROM information_schema.tables WHERE table_schema = DATABASE()) AS size_mb \
+                FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = DATABASE()";
+            let rows = sqlx::query(sql).fetch_all(&pool).await?;
+            rows.iter()
+                .map(|row| {
+                    json!({
+                        "name": col(row, "name"),
+                        "charset": col_opt(row, "charset"),
+                        "collation": col_opt(row, "collation"),
+                        "table_count": row.try_get::<i64, _>("table_count").unwrap_or(0),
+                        "size_mb": row.try_get::<Option<f64>, _>("size_mb").ok().flatten(),
+                    })
+                })
+                .collect()
+        }
         IntrospectType::TableInfo => {
             let table = params.table.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("table parameter required for table_info introspection")

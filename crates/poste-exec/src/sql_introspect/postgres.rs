@@ -138,6 +138,27 @@ pub(super) async fn introspect_postgres(params: &IntrospectParams) -> Result<Val
                 .ok_or_else(|| anyhow::anyhow!("table parameter required for ddl introspection"))?;
             build_create_table_from_introspect_postgres(&pool, schema, table).await?
         }
+        IntrospectType::DatabaseInfo => {
+            let sql = "\
+                SELECT current_database() AS name, \
+                       pg_size_pretty(pg_database_size(current_database())) AS total_size, \
+                       (SELECT COUNT(*) FROM information_schema.tables \
+                        WHERE table_catalog = current_database() \
+                        AND table_schema NOT IN ('pg_catalog', 'information_schema')) AS table_count, \
+                       pg_encoding_to_char(encoding) AS encoding \
+                FROM pg_database WHERE datname = current_database()";
+            let rows = sqlx::query(sql).fetch_all(&pool).await?;
+            rows.iter()
+                .map(|row| {
+                    json!({
+                        "name": row.get::<String, _>("name"),
+                        "total_size": row.get::<String, _>("total_size"),
+                        "table_count": row.get::<i64, _>("table_count"),
+                        "encoding": row.get::<String, _>("encoding"),
+                    })
+                })
+                .collect()
+        }
         IntrospectType::TableInfo => {
             let schema = params.schema.as_deref().unwrap_or("public");
             let table = params.table.as_deref().ok_or_else(|| {

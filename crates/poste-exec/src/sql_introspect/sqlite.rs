@@ -121,6 +121,19 @@ pub(super) async fn introspect_sqlite(params: &IntrospectParams) -> Result<Value
                 .ok_or_else(|| anyhow::anyhow!("table parameter required for ddl introspection"))?;
             build_create_table_from_introspect_sqlite(&pool, table).await?
         }
+        IntrospectType::DatabaseInfo => {
+            let sql = "SELECT name AS table_name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'";
+            let rows = sqlx::query(sql).fetch_all(&pool).await?;
+            let table_count = rows.len() as i64;
+            vec![json!({
+                "name": "main",
+                "table_count": table_count,
+                "file": conn_str
+                    .strip_prefix("sqlite:")
+                    .unwrap_or(&conn_str)
+                    .to_string(),
+            })]
+        }
         IntrospectType::TableInfo => {
             let table = params.table.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("table parameter required for table_info introspection")
