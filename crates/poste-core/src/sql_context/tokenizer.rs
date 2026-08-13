@@ -210,16 +210,35 @@ pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
                     end: i,
                 });
             }
-            // Numeric literal
+            // Numeric literal, or a digit-leading identifier (e.g. `23_tablename`
+            // — legal unquoted in MySQL/MariaDB). If digits continue directly into
+            // identifier characters (letter or underscore, NOT `-` so arithmetic
+            // like `10-2` keeps its operator), consume the whole word as one Ident
+            // so table/column context detection sees a single token.
             b'0'..=b'9' => {
                 while i < n && bytes[i].is_ascii_digit() {
                     i += 1;
                 }
-                tokens.push(Token {
-                    kind: TokenKind::NumLit,
-                    start,
-                    end: i,
-                });
+                if i < n && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
+                    while i < n
+                        && (bytes[i].is_ascii_alphanumeric()
+                            || bytes[i] == b'_'
+                            || bytes[i] == b'-')
+                    {
+                        i += 1;
+                    }
+                    tokens.push(Token {
+                        kind: TokenKind::Ident,
+                        start,
+                        end: i,
+                    });
+                } else {
+                    tokens.push(Token {
+                        kind: TokenKind::NumLit,
+                        start,
+                        end: i,
+                    });
+                }
             }
             b'.' => {
                 i += 1;

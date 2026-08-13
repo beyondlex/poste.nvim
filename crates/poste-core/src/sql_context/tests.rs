@@ -78,6 +78,31 @@ fn test_tokenize_subtraction_operator() {
 }
 
 #[test]
+fn test_tokenize_digit_leading_identifier() {
+    let src = "SELECT * FROM 23_tablename";
+    let tokens = tokenize(src);
+    assert!(tokens
+        .iter()
+        .any(|t| matches!(t.kind, TokenKind::Ident) && t.text(src) == "23_tablename"));
+    assert!(!tokens
+        .iter()
+        .any(|t| t.kind == TokenKind::NumLit && t.text(src) == "23"));
+}
+
+#[test]
+fn test_tokenize_digit_leading_identifier_keeps_arithmetic() {
+    // `10-2` must stay NumLit Op NumLit — digit-leading merge only applies when
+    // digits run directly into identifier characters (letter/underscore).
+    let src = "SELECT 10-2";
+    let tokens = tokenize(src);
+    assert!(tokens
+        .iter()
+        .any(|t| t.kind == TokenKind::NumLit && t.text(src) == "10"));
+    assert!(tokens.iter().any(|t| t.kind == TokenKind::NumLit && t.text(src) == "2"));
+    assert!(tokens.iter().any(|t| t.kind == TokenKind::Op));
+}
+
+#[test]
 fn test_tokenize_inline_block_comment() {
     let tokens = tokenize("SELECT /* inline */ col FROM t");
     assert!(tokens.iter().any(|t| t.kind == TokenKind::BlockComment));
@@ -178,6 +203,26 @@ fn test_detect_select_star_f_prefix_returns_keyword() {
 fn test_detect_table_after_from() {
     let result = detect_context("SELECT * FROM ", 14).unwrap();
     assert_eq!(result.context_type, ContextType::Table);
+}
+
+#[test]
+fn test_detect_table_after_from_digit_leading_name() {
+    // `23_tablename` — legal unquoted in MySQL — must be one token, so the
+    // cursor lands on a table context instead of a mangled NumLit/Ident pair.
+    let result = detect_context("SELECT * FROM 23_", 17).unwrap();
+    assert_eq!(result.context_type, ContextType::Table);
+}
+
+#[test]
+fn test_detect_join_digit_leading_name() {
+    let result = detect_context("SELECT * FROM a  JOIN 2024_", 29).unwrap();
+    assert_eq!(result.context_type, ContextType::Table);
+}
+
+#[test]
+fn test_extract_digit_leading_table() {
+    let result = detect_context("SELECT * FROM 2024_log ", 24).unwrap();
+    assert!(result.tables.iter().any(|t| t.name == "2024_log"));
 }
 
 #[test]
