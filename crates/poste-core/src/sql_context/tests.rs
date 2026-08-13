@@ -659,6 +659,59 @@ fn test_detect_alter_table_add_column_datatype() {
 }
 
 #[test]
+fn test_detect_alter_table_drop_column() {
+    let result = detect_context("ALTER TABLE users DROP COLUMN ", 30).unwrap();
+    assert_eq!(
+        result.context_type,
+        ContextType::Column,
+        "DROP COLUMN should suggest existing column names"
+    );
+    assert!(
+        result.tables.iter().any(|t| t.name == "users"),
+        "Tables should include 'users' from ALTER TABLE"
+    );
+}
+
+#[test]
+fn test_detect_alter_table_drop_column_typed_prefix() {
+    let result = detect_context("ALTER TABLE users DROP COLUMN ag", 32).unwrap();
+    assert_eq!(result.context_type, ContextType::Column);
+    assert_eq!(
+        result.prefix, "ag",
+        "Typed column prefix should be preserved"
+    );
+}
+
+#[test]
+fn test_detect_alter_table_drop_column_after_name() {
+    let result = detect_context("ALTER TABLE users DROP COLUMN age ", 34).unwrap();
+    assert_eq!(
+        result.context_type,
+        ContextType::Column,
+        "After a completed column name, still suggest next drop column"
+    );
+}
+
+#[test]
+fn test_detect_alter_table_drop_column_list_comma() {
+    let result = detect_context("ALTER TABLE users DROP COLUMN age, ", 36).unwrap();
+    assert_eq!(
+        result.context_type,
+        ContextType::Column,
+        "After comma in DROP COLUMN list should suggest next column"
+    );
+}
+
+#[test]
+fn test_detect_alter_table_drop_column_schema_qualified() {
+    let result = detect_context("ALTER TABLE auth.users DROP COLUMN ", 36).unwrap();
+    assert_eq!(result.context_type, ContextType::Column);
+    assert!(result.tables.iter().any(|t| {
+        t.name == "users" && t.schema == Some("auth".into())
+    }));
+}
+
+#[test]
 fn test_detect_drop_table() {
     let result = detect_context("DROP TABLE ", 11).unwrap();
     assert_eq!(result.context_type, ContextType::Table);

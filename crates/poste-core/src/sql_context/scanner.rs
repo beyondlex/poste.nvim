@@ -106,13 +106,17 @@ pub(crate) fn detect_scan_backward(
                                 }
                                 return ContextType::DataType;
                             }
+                            if prev_kw == "drop" {
+                                return ContextType::Column;
+                            }
                         }
                     }
                 }
                 if kw == "column" && skip_one_ident {
                     if let Some(prev) = skip_back(tokens, i) {
                         if tokens[prev].kind == TokenKind::Keyword
-                            && kw_eq(tokens[prev].text(sql), "modify")
+                            && (kw_eq(tokens[prev].text(sql), "modify")
+                                || kw_eq(tokens[prev].text(sql), "drop"))
                         {
                             return ContextType::Column;
                         }
