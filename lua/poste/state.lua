@@ -64,6 +64,9 @@ M.config = {
       insert_row = "o",
       commit_edits = "<leader>w",
       export = "E",
+      history_toggle = "<leader>ph",
+      history_next = "<leader>n",
+      history_prev = "<leader>p",
       help = "g?",
     },
     sql_table_ops = {
