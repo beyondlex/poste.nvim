@@ -47,7 +47,11 @@ fn is_statement_start_keyword(kw: &str) -> bool {
 fn kw_contains(container: &str, contained: &str) -> bool {
     matches!(
         (container, contained),
-        ("insert", "select") | ("insert", "update") | ("select", "update") | ("with", _) | ("alter", "drop")
+        ("insert", "select")
+            | ("insert", "update")
+            | ("select", "update")
+            | ("with", _)
+            | ("alter", "drop")
     )
 }
 

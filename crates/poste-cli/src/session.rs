@@ -71,13 +71,20 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
             Ok(v) => v,
             Err(e) => {
                 let err = json!({"type":"result","seq":0,"status":"error","error":format!("JSON parse error: {}", e)});
-                stdout.write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes()).await?;
+                stdout
+                    .write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes())
+                    .await?;
                 stdout.flush().await?;
                 continue;
             }
         };
         let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-        let sql = req.get("sql").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let sql = req
+            .get("sql")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if sql.is_empty() {
             continue;
         }
@@ -93,7 +100,8 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
         {
             let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
             let rows: Vec<sqlx::sqlite::SqliteRow> = if timeout_secs > 0 {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch).await
+                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                    .await
                 {
                     Ok(rows) => rows?,
                     Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
@@ -125,9 +133,7 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
                     first_row
                         .columns()
                         .iter()
-                        .map(|col| {
-                            json!({"name": col.name(), "type": col.type_info().name()})
-                        })
+                        .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -167,7 +173,9 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
                 "execution_time_ms": elapsed, "columns": [], "rows": [],
             })
         };
-        stdout.write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes()).await?;
+        stdout
+            .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
+            .await?;
         stdout.flush().await?;
     }
 
@@ -198,13 +206,20 @@ async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64
             Ok(v) => v,
             Err(e) => {
                 let err = json!({"type":"result","seq":0,"status":"error","error":format!("JSON parse error: {}", e)});
-                stdout.write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes()).await?;
+                stdout
+                    .write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes())
+                    .await?;
                 stdout.flush().await?;
                 continue;
             }
         };
         let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-        let sql = req.get("sql").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let sql = req
+            .get("sql")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if sql.is_empty() {
             continue;
         }
@@ -221,7 +236,8 @@ async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64
         {
             let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
             let rows: Vec<PgRow> = if timeout_secs > 0 {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch).await
+                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                    .await
                 {
                     Ok(rows) => rows?,
                     Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
@@ -253,9 +269,7 @@ async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64
                     first_row
                         .columns()
                         .iter()
-                        .map(|col| {
-                            json!({"name": col.name(), "type": col.type_info().name()})
-                        })
+                        .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -295,7 +309,9 @@ async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64
                 "execution_time_ms": elapsed, "columns": [], "rows": [],
             })
         };
-        stdout.write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes()).await?;
+        stdout
+            .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
+            .await?;
         stdout.flush().await?;
     }
 
@@ -326,13 +342,20 @@ async fn session_mysql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
             Ok(v) => v,
             Err(e) => {
                 let err = json!({"type":"result","seq":0,"status":"error","error":format!("JSON parse error: {}", e)});
-                stdout.write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes()).await?;
+                stdout
+                    .write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes())
+                    .await?;
                 stdout.flush().await?;
                 continue;
             }
         };
         let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-        let sql = req.get("sql").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let sql = req
+            .get("sql")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if sql.is_empty() {
             continue;
         }
@@ -349,7 +372,8 @@ async fn session_mysql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
         {
             let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
             let rows: Vec<MySqlRow> = if timeout_secs > 0 {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch).await
+                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                    .await
                 {
                     Ok(rows) => rows?,
                     Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
@@ -381,9 +405,7 @@ async fn session_mysql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
                     first_row
                         .columns()
                         .iter()
-                        .map(|col| {
-                            json!({"name": col.name(), "type": col.type_info().name()})
-                        })
+                        .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -423,7 +445,9 @@ async fn session_mysql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
                 "execution_time_ms": elapsed, "columns": [], "rows": [],
             })
         };
-        stdout.write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes()).await?;
+        stdout
+            .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
+            .await?;
         stdout.flush().await?;
     }
 

@@ -98,7 +98,9 @@ fn test_tokenize_digit_leading_identifier_keeps_arithmetic() {
     assert!(tokens
         .iter()
         .any(|t| t.kind == TokenKind::NumLit && t.text(src) == "10"));
-    assert!(tokens.iter().any(|t| t.kind == TokenKind::NumLit && t.text(src) == "2"));
+    assert!(tokens
+        .iter()
+        .any(|t| t.kind == TokenKind::NumLit && t.text(src) == "2"));
     assert!(tokens.iter().any(|t| t.kind == TokenKind::Op));
 }
 
@@ -751,9 +753,10 @@ fn test_detect_alter_table_drop_column_list_comma() {
 fn test_detect_alter_table_drop_column_schema_qualified() {
     let result = detect_context("ALTER TABLE auth.users DROP COLUMN ", 36).unwrap();
     assert_eq!(result.context_type, ContextType::Column);
-    assert!(result.tables.iter().any(|t| {
-        t.name == "users" && t.schema == Some("auth".into())
-    }));
+    assert!(result
+        .tables
+        .iter()
+        .any(|t| { t.name == "users" && t.schema == Some("auth".into()) }));
 }
 
 #[test]

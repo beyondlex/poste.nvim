@@ -10,7 +10,12 @@ fn main() {
     println!("cargo:rustc-env=POSTE_TAG={tag}");
 
     let build_date = std::process::Command::new("git")
-        .args(["log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M:%S"])
+        .args([
+            "log",
+            "-1",
+            "--format=%cd",
+            "--date=format:%Y-%m-%d %H:%M:%S",
+        ])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
