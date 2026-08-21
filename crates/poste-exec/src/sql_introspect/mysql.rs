@@ -91,6 +91,7 @@ pub(super) async fn introspect_mysql(params: &IntrospectParams) -> Result<Value>
                         "key": col(row, "Key"),
                         "extra": col(row, "Extra"),
                         "comment": col_opt(row, "Comment"),
+                        "collation": col_opt(row, "Collation"),
                         "fk_table": ref_table,
                         "fk_column": ref_col,
                     })
