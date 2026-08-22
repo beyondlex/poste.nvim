@@ -1,6 +1,6 @@
 # poste.nvim
 
-Shared infrastructure and Rust CLI for the Poste ecosystem. Required by [poste-http.nvim](https://github.com/beyondlex/poste-http.nvim) and [poste-sql.nvim](https://github.com/beyondlex/poste-sql.nvim).
+Shared infrastructure and Rust CLI for the Poste ecosystem. Required by [poste-http.nvim](https://github.com/beyondlex/poste-http.nvim) and [poste-db.nvim](https://github.com/beyondlex/poste-db.nvim).
 
 ## What's Here
 

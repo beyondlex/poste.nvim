@@ -20,7 +20,7 @@ Poste is split into three repositories:
 |------|-------------|
 | [poste.nvim](https://github.com/beyondlex/poste.nvim) | Shared infrastructure, Rust CLI, build system *(this repo)* |
 | [poste-http.nvim](https://github.com/beyondlex/poste-http.nvim) | HTTP protocol execution, Neovim UI |
-| [poste-sql.nvim](https://github.com/beyondlex/poste-sql.nvim) | SQL execution, dataset browser, schema introspection |
+| [poste-db.nvim](https://github.com/beyondlex/poste-db.nvim) | SQL execution, dataset browser, schema introspection |
 
 ### Architecture
 
@@ -39,9 +39,9 @@ poste-http.nvim/               ← HTTP + Redis
 ├── plugin/poste.lua
 └── tests/
 
-poste-sql.nvim/                ← SQL (optional)
+poste-db.nvim/                ← SQL (optional)
 ├── lua/poste/sql/             # SQL protocol modules
-├── plugin/poste-sql.lua
+├── plugin/poste-db.lua
 └── tests/sql/
 ```
 
@@ -69,7 +69,7 @@ poste-sql.nvim/                ← SQL (optional)
 
 ```lua
 {
-  "beyondlex/poste-sql.nvim",
+  "beyondlex/poste-db.nvim",
   dependencies = {
     "beyondlex/poste.nvim",
   },
