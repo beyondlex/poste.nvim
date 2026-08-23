@@ -82,7 +82,6 @@ M.config = {
       context_menu = "x",
       refresh_node = "r",
       search_filter = "/",
-      describe_query = "d",
       close = "q",
       search_next = "n",
       search_prev = "N",
