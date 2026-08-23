@@ -230,7 +230,7 @@ async fn build_create_table_from_introspect_mysql(
     let col_sql = format!("SHOW FULL COLUMNS FROM `{}`", table);
     let col_rows = match sqlx::query(&col_sql).fetch_all(pool).await {
         Ok(rows) => rows,
-        Err(e) => {
+        Err(_e) => {
             // If SHOW FULL COLUMNS fails (e.g. the object is a sequence, not a table),
             // try SHOW CREATE SEQUENCE as a fallback for MariaDB 10.3+.
             let seq_sql = format!("SHOW CREATE SEQUENCE `{}`", table);
@@ -243,7 +243,7 @@ async fn build_create_table_from_introspect_mysql(
                     "dialect": "mysql|mariadb",
                 })]);
             }
-            return Err(e.into());
+            return Err(anyhow::anyhow!("Object '{}' not found in database", table));
         }
     };
 
