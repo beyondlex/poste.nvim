@@ -92,10 +92,24 @@ where
 
     // Parse SQL statements directly from file content (strip -- @... directives)
     let body = strip_sql_directives(&content);
-    let statements = poste_core::sql_parser::split_statements(&body);
+    let all_statements = poste_core::sql_parser::split_statements(&body);
+
+    if all_statements.is_empty() {
+        anyhow::bail!("No SQL statements found in file");
+    }
+
+    // Filter out USE statements: they are silently skipped during execution
+    // (the database is already set via --database or connection URL). Removing
+    // them here keeps `total` and seq numbering consistent — no gaps, no stuck
+    // progress bar.
+    let statements: Vec<String> = all_statements
+        .iter()
+        .filter(|s| !s.trim().is_empty() && !s.trim().to_uppercase().starts_with("USE "))
+        .cloned()
+        .collect();
 
     if statements.is_empty() {
-        anyhow::bail!("No SQL statements found in file");
+        anyhow::bail!("No executable SQL statements found in file (only USE/empty statements)");
     }
 
     let total = statements.len() as u64;
