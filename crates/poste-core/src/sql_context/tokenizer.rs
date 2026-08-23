@@ -429,6 +429,7 @@ pub(crate) fn is_known_keyword(word: &str) -> bool {
         b"GRANT",
         b"GROUP",
         b"HAVING",
+        b"IF",
         b"ILIKE",
         b"IN",
         b"INDEX",
