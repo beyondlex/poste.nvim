@@ -48,6 +48,26 @@ pub(crate) fn parse_table_ref<'a>(
     let first_text = first.display_text(sql);
     let mut consumed = 1;
 
+    // Handle `IF EXISTS` clause in DDL statements (DROP TABLE IF EXISTS, …).
+    // The parser treats `IF` as a table name; skip it and `EXISTS` to find the
+    // actual table.
+    if first_text.eq_ignore_ascii_case("if") {
+        if let Some(exists_idx) = skip_forward(tokens, i) {
+            if let Some(exists_tok) = tokens.get(exists_idx) {
+                if exists_tok.kind == TokenKind::Keyword
+                    && exists_tok.text(sql).eq_ignore_ascii_case("exists")
+                {
+                    if let Some(table_idx) = skip_forward(tokens, exists_idx) {
+                        let (schema, table_name, alias, sub_consumed) =
+                            parse_table_ref(tokens, table_idx, sql);
+                        let total_consumed = sub_consumed + (table_idx - i);
+                        return (schema, table_name, alias, total_consumed);
+                    }
+                }
+            }
+        }
+    }
+
     // Check for schema qualifier: find '.' after this token using skip_forward
     if let Some(dot_idx) = skip_forward(tokens, i) {
         if tokens[dot_idx].kind == TokenKind::Dot {
