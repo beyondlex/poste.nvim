@@ -40,7 +40,7 @@ poste-http.nvim/               ← HTTP + Redis
 └── tests/
 
 poste-db.nvim/                ← SQL (optional)
-├── lua/poste/sql/             # SQL protocol modules
+├── lua/poste-db/             # SQL protocol modules
 ├── plugin/poste-db.lua
 └── tests/sql/
 ```
@@ -74,7 +74,7 @@ poste-db.nvim/                ← SQL (optional)
     "beyondlex/poste.nvim",
   },
   config = function()
-    require("poste.sql.init").setup()
+    require("poste-db").setup()
   end,
 }
 ```

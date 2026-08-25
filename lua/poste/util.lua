@@ -1,6 +1,6 @@
 --- Poste shared utility functions used across HTTP and SQL subsystems.
 ---
---- Extracted from init.lua and sql/init.lua to eliminate code duplication
+--- Extracted from init.lua to eliminate code duplication
 --- and provide a single source of truth for common operations like JSON
 --- cleanup, file discovery, and job data normalization.
 

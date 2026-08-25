@@ -4,7 +4,7 @@ Shared infrastructure and Rust CLI for the Poste ecosystem. Required by [poste-h
 
 ## What's Here
 
-- `lua/poste/` — Shared Lua modules (state.lua, select.lua, indicators.lua, cli.lua, util.lua, install.lua, error.lua, buffer_setup.lua, help.lua, async/promise.lua, state/event.lua, constants.lua, core.lua)
+- `lua/poste/` — Shared Lua modules (state.lua, select.lua, indicators.lua, cli.lua, util.lua, install.lua, error.lua, async/promise.lua, state/event.lua, constants.lua, core.lua)
 - `crates/` — Rust workspace (poste-core, poste-exec, poste-cli)
 - `plugin/poste-core.lua` — Plugin loader
 - `.opencode/skills/` — Shared skills (arch-review, neovim-performance, refactor)

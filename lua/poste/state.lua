@@ -10,100 +10,10 @@ M.config = {
   max_body_bytes = 100 * 1024,
   max_body_lines = 500,
   body_preview_lines = 20,
-  sql_formatters = { "sqlfluff", "sqlfmt", "sql-formatter", "pg_format" },
-  hide_empty_result_tabs = true,
-  db_browser = {
-    split_position = "left",  -- "left" or "right"
-    split_width = 40,
-  },
-  keymaps = {
-    sql_source = {
-      run = "<CR>",
-      show_ddl = "K",
-      format = "<leader>ff",
-      clear_filter = "<leader>cr",
-      toggle_db_browser = "<leader>db",
-      trigger_completion = "<C-Space>",
-      help = "g?",
-    },
-    sql_dataset = {
-      close = "q",
-      move_left = "h",
-      move_down = "j",
-      move_up = "k",
-      move_right = "l",
-      prev_page = "H",
-      next_page = "L",
-      first_col = "0",
-      last_col = "$",
-      first_row = "gg",
-      last_row = "G",
-      preview_cell = "K",
-      yank_cell = "yy",
-      yank_column = "yc",
-      sort_column = "s",
-      toggle_raw_mode = "<leader>gp",
-      next_tab = "<Tab>",
-      prev_tab = "<S-Tab>",
-      rerun = "R",
-      goto_first_page = "<leader>hh",
-      goto_last_page = "<leader>ll",
-      toggle_pagination = "<leader>pa",
-      find_column = "<leader>fc",
-      filter_by_cell = "<leader>ce",
-      show_search = "<leader>/",
-      clear_filter_search = "<leader>cr",
-      next_search = "n",
-      prev_search = "N",
-      edit_cell = "i",
-      edit_cell_replace = "cc",
-      delete_row = "dd",
-      insert_row = "o",
-      commit_edits = "<leader>w",
-      export = "E",
-      history_toggle = "<leader>ph",
-      history_next = "<leader>n",
-      history_prev = "<leader>p",
-      help = "g?",
-    },
-    sql_table_ops = {
-      select_all = "ma",
-      refresh_all = "mr",
-      describe_all = "md",
-      toggle_menu = "mt",
-    },
-    sql_db_browser = {
-      toggle_node = "<CR>",
-      move_left = "h",
-      move_right = "l",
-      context_menu = "x",
-      refresh_node = "r",
-      search_filter = "/",
-      close = "q",
-      search_next = "n",
-      search_prev = "N",
-      help = "g?",
-      table_info = "i",
-    },
-    sql_introspect = {
-      close = "q",
-      close_alt = "<Esc>",
-    },
-  },
   highlights = {},
 }
 
 M.current_env = M.config.default_env
-M._sql_session = nil
-
--- Defer SQL state loading to avoid circular dependency during poste-db.nvim config
-setmetatable(M, { __index = function(t, k)
-  if k == "sql" then
-    local ok, sql_state = pcall(require, "poste-db.state")
-    if ok then rawset(t, "sql", sql_state); return sql_state end
-    return nil
-  end
-end })
 
 local KEY_DISPLAY_NAMES = {
   ["<Tab>"] = "Tab",
