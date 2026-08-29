@@ -69,8 +69,10 @@ impl Dialect for PostgresDialect {
     }
 
     fn list_tables(&self) -> &str {
-        "SELECT table_name, table_type FROM information_schema.tables \
-         WHERE table_schema = $1 ORDER BY table_name"
+        "SELECT t.table_name, t.table_type, \
+                obj_description((quote_ident(t.table_schema) || '.' || quote_ident(t.table_name))::regclass) AS comment \
+         FROM information_schema.tables t \
+         WHERE t.table_schema = $1 ORDER BY t.table_name"
     }
 
     fn list_columns(&self) -> &str {
@@ -183,7 +185,9 @@ impl Dialect for MysqlDialect {
     }
 
     fn list_tables(&self) -> &str {
-        "SHOW TABLES"
+        "SELECT table_name, table_type, table_comment AS comment \
+         FROM information_schema.tables \
+         WHERE table_schema = DATABASE() ORDER BY table_name"
     }
 
     fn list_columns(&self) -> &str {
@@ -362,7 +366,8 @@ mod tests {
         assert_eq!(d.quote_identifier("users"), "`users`");
         assert_eq!(d.quote_identifier("my`table"), "`my``table`");
         assert!(d.list_schemas().is_none());
-        assert_eq!(d.list_tables(), "SHOW TABLES");
+        assert!(d.list_tables().contains("information_schema.tables"));
+        assert!(d.list_tables().contains("table_comment"));
         assert_eq!(d.type_mapping("tinyint(1)"), "boolean");
         assert_eq!(d.type_mapping("varchar(255)"), "varchar");
     }

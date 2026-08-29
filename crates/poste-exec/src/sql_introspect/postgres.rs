@@ -39,6 +39,7 @@ pub(super) async fn introspect_postgres(params: &IntrospectParams) -> Result<Val
                     json!({
                         "name": row.get::<String, _>("table_name"),
                         "type": row.get::<String, _>("table_type"),
+                        "comment": row.get::<Option<String>, _>("comment"),
                     })
                 })
                 .collect()
