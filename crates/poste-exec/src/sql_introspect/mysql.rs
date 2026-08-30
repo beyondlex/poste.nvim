@@ -51,9 +51,9 @@ pub(super) async fn introspect_mysql(params: &IntrospectParams) -> Result<Value>
             rows.iter()
                 .map(|row| {
                     json!({
-                        "name": row.get::<String, _>("table_name"),
-                        "type": row.get::<String, _>("table_type"),
-                        "comment": row.get::<Option<String>, _>("comment"),
+                        "name": col(row, "table_name"),
+                        "type": col(row, "table_type"),
+                        "comment": col_opt(row, "comment"),
                     })
                 })
                 .collect()

@@ -185,7 +185,8 @@ impl Dialect for MysqlDialect {
     }
 
     fn list_tables(&self) -> &str {
-        "SELECT table_name, table_type, table_comment AS comment \
+        "SELECT table_name AS table_name, table_type AS table_type, \
+                table_comment AS comment \
          FROM information_schema.tables \
          WHERE table_schema = DATABASE() ORDER BY table_name"
     }
@@ -370,6 +371,18 @@ mod tests {
         assert!(d.list_tables().contains("table_comment"));
         assert_eq!(d.type_mapping("tinyint(1)"), "boolean");
         assert_eq!(d.type_mapping("varchar(255)"), "varchar");
+    }
+
+    #[test]
+    fn test_mysql_list_tables_aliases_column_names() {
+        // sqlx-mysql matches result columns by the exact name the server
+        // reports. `information_schema.tables` returns its bare columns
+        // uppercased (TABLE_NAME/TABLE_TYPE), so list_tables must alias
+        // them to lowercase for `row.get("table_name")` to succeed.
+        let sql = MysqlDialect.list_tables();
+        assert!(sql.contains("table_name AS table_name"), "SQL: {sql}");
+        assert!(sql.contains("table_type AS table_type"), "SQL: {sql}");
+        assert!(sql.contains("table_comment AS comment"), "SQL: {sql}");
     }
 
     #[test]
