@@ -5,6 +5,7 @@ mod connection;
 mod context;
 mod exec_file;
 mod introspect;
+mod redis_exec;
 mod session;
 mod util;
 
@@ -40,6 +41,8 @@ enum Commands {
     ExecFile(exec_file::ExecFileArgs),
     /// Persistent SQL session (keeps connection alive across requests)
     Session(session::SessionArgs),
+    /// Execute pre-tokenized redis commands (stdin JSON: {connection, commands})
+    RedisExec(redis_exec::RedisExecArgs),
 }
 
 #[tokio::main]
@@ -72,6 +75,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Session(args)) => {
             session::execute(args).await?;
+        }
+        Some(Commands::RedisExec(args)) => {
+            redis_exec::execute(args).await?;
         }
         None => {}
     }

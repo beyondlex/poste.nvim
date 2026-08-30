@@ -38,66 +38,88 @@ pub fn validate_connection_url(url: &str) -> Result<()> {
     }
 }
 
-/// Execute pre-tokenized commands on one multiplexed connection.
-/// A command error is recorded in its outcome; only transport-level
-/// failures (connect, protocol) bail.
-pub async fn execute_commands(
+/// Execute pre-tokenized commands on one multiplexed connection, invoking
+/// `on_result` as each command completes. A command error is recorded in
+/// its outcome; only transport-level failures (connect, protocol) bail.
+pub async fn execute_commands_with<F>(
     connection_url: &str,
     commands: &[Vec<String>],
     max_items: usize,
     max_bytes: usize,
-) -> Result<Vec<CommandOutcome>> {
+    mut on_result: F,
+) -> Result<()>
+where
+    F: FnMut(&CommandOutcome),
+{
     validate_connection_url(connection_url)?;
     let client = redis::Client::open(connection_url)?;
     let mut con = client.get_multiplexed_async_connection().await?;
 
-    let mut outcomes = Vec::with_capacity(commands.len());
     for (i, tokens) in commands.iter().enumerate() {
         let started = std::time::Instant::now();
         let display = tokens.join(" ");
-        if tokens.is_empty() {
-            outcomes.push(CommandOutcome {
+        let outcome = if tokens.is_empty() {
+            CommandOutcome {
                 command: display,
                 seq: i + 1,
                 latency_ms: 0,
                 value: json!({"type": "nil", "value": null}),
                 status: String::new(),
                 error: Some("Empty command".into()),
-            });
-            continue;
-        }
-
-        let cmd_name = tokens[0].to_uppercase();
-        let mut cmd = redis::cmd(&cmd_name);
-        for arg in &tokens[1..] {
-            cmd.arg(arg.as_str());
-        }
-
-        match cmd.query_async::<redis::Value>(&mut con).await {
-            Ok(val) => {
-                let value = redis_value_to_json(&val, &cmd_name, max_items, max_bytes);
-                let status = status_text(&val);
-                outcomes.push(CommandOutcome {
-                    command: display,
-                    seq: i + 1,
-                    latency_ms: started.elapsed().as_millis(),
-                    value,
-                    status,
-                    error: None,
-                });
             }
-            Err(e) => {
-                outcomes.push(CommandOutcome {
+        } else {
+            let cmd_name = tokens[0].to_uppercase();
+            let mut cmd = redis::cmd(&cmd_name);
+            for arg in &tokens[1..] {
+                cmd.arg(arg.as_str());
+            }
+            match cmd.query_async::<redis::Value>(&mut con).await {
+                Ok(val) => {
+                    let value = redis_value_to_json(&val, &cmd_name, max_items, max_bytes);
+                    let status = status_text(&val);
+                    CommandOutcome {
+                        command: display,
+                        seq: i + 1,
+                        latency_ms: started.elapsed().as_millis(),
+                        value,
+                        status,
+                        error: None,
+                    }
+                }
+                Err(e) => CommandOutcome {
                     command: display,
                     seq: i + 1,
                     latency_ms: started.elapsed().as_millis(),
                     value: json!({"type": "nil", "value": null}),
                     status: "error".into(),
                     error: Some(format!("{}", e)),
-                });
+                },
             }
-        }
+        };
+        on_result(&outcome);
     }
+    Ok(())
+}
+
+/// Execute pre-tokenized commands, collecting all outcomes.
+pub async fn execute_commands(
+    connection_url: &str,
+    commands: &[Vec<String>],
+    max_items: usize,
+    max_bytes: usize,
+) -> Result<Vec<CommandOutcome>> {
+    let mut outcomes = Vec::with_capacity(commands.len());
+    execute_commands_with(connection_url, commands, max_items, max_bytes, |o| {
+        outcomes.push(CommandOutcome {
+            command: o.command.clone(),
+            seq: o.seq,
+            latency_ms: o.latency_ms,
+            value: o.value.clone(),
+            status: o.status.clone(),
+            error: o.error.clone(),
+        })
+    })
+    .await?;
     Ok(outcomes)
 }
 
