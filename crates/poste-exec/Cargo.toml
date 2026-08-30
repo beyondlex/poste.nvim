@@ -20,3 +20,6 @@ chrono = "0.4"
 sqlx.workspace = true
 rust_decimal.workspace = true
 percent-encoding = "2"
+
+# Redis
+redis = { version = "0.27", features = ["tokio-comp"] }

@@ -1,5 +1,6 @@
 //! Poste exec: execute database requests.
 
+pub mod redis_executor;
 pub mod response;
 pub mod sql_connection;
 pub mod sql_ddl;
