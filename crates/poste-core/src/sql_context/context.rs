@@ -151,20 +151,35 @@ pub fn detect_context_with_dialect(
         });
     }
 
-    let cursor_on_ident = matches!(
-        cursor_tok.kind,
-        TokenKind::Ident
-            | TokenKind::QuotedIdent
-            | TokenKind::Keyword
-            | TokenKind::NumLit
-            | TokenKind::At
-    ) || (matches!(cursor_tok.kind, TokenKind::Whitespace)
-        && offset > 0
-        && offset <= sql.len()
-        && sql[..offset]
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_alphanumeric() || c == '_'));
+    // A cursor sitting on `;` right after a typed identifier is still "on the
+    // identifier" (e.g. `SELECT * FROM ca;` with the cursor between `ca` and
+    // `;`) — the user hasn't finished the reference yet, so the scanner must
+    // not treat it as a completed table name.  Require the identifier to be
+    // immediately adjacent (no whitespace) so `FROM ca ;` still reads as a
+    // finished reference.
+    let cursor_after_semi = offset <= sql.len()
+        && cursor_tok.kind == TokenKind::Semi
+        && cursor_idx > 0
+        && matches!(
+            tokens[cursor_idx - 1].kind,
+            TokenKind::Ident | TokenKind::QuotedIdent | TokenKind::NumLit | TokenKind::At
+        );
+    let cursor_on_ident = cursor_after_semi
+        || matches!(
+            cursor_tok.kind,
+            TokenKind::Ident
+                | TokenKind::QuotedIdent
+                | TokenKind::Keyword
+                | TokenKind::NumLit
+                | TokenKind::At
+        )
+        || (matches!(cursor_tok.kind, TokenKind::Whitespace)
+            && offset > 0
+            && offset <= sql.len()
+            && sql[..offset]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_'));
     let context_type = detect_scan_backward(&tokens, cursor_idx, sql, cursor_on_ident);
 
     Some(ContextResult {

@@ -258,6 +258,21 @@ fn test_detect_column_where_semicolon_after() {
 }
 
 #[test]
+fn test_detect_table_prefix_before_semicolon() {
+    // Cursor between `ca` and `;` — still completing the table name.
+    let result = detect_context("SELECT * from ca;", 16).unwrap();
+    assert_eq!(result.context_type, ContextType::Table);
+    assert_eq!(result.prefix, "ca");
+}
+
+#[test]
+fn test_detect_table_prefix_before_semicolon_with_space_is_keyword() {
+    // Whitespace between the table prefix and `;` means the reference is done.
+    let result = detect_context("SELECT * from ca ;", 17).unwrap();
+    assert_eq!(result.context_type, ContextType::Keyword);
+}
+
+#[test]
 fn test_detect_on_column() {
     let result = detect_context("SELECT * FROM users u JOIN posts p ON ", 39).unwrap();
     assert_eq!(result.context_type, ContextType::Column);
