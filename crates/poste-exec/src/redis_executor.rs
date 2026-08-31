@@ -38,6 +38,58 @@ pub fn validate_connection_url(url: &str) -> Result<()> {
     }
 }
 
+/// Execute one pre-tokenized command on an already-open connection, producing
+/// its outcome. `seq` is caller-supplied (1-based within the batch/session).
+/// Session mode (poste redis-session) reuses one connection across calls so
+/// SELECT and other per-connection state persist between requests.
+pub async fn execute_command_on(
+    con: &mut redis::aio::MultiplexedConnection,
+    tokens: &[String],
+    seq: usize,
+    max_items: usize,
+    max_bytes: usize,
+) -> CommandOutcome {
+    let started = std::time::Instant::now();
+    let display = tokens.join(" ");
+    if tokens.is_empty() {
+        return CommandOutcome {
+            command: display,
+            seq,
+            latency_ms: 0,
+            value: json!({"type": "nil", "value": null}),
+            status: String::new(),
+            error: Some("Empty command".into()),
+        };
+    }
+    let cmd_name = tokens[0].to_uppercase();
+    let mut cmd = redis::cmd(&cmd_name);
+    for arg in &tokens[1..] {
+        cmd.arg(arg.as_str());
+    }
+    match cmd.query_async::<redis::Value>(con).await {
+        Ok(val) => {
+            let value = redis_value_to_json(&val, &cmd_name, max_items, max_bytes);
+            let status = status_text(&val);
+            CommandOutcome {
+                command: display,
+                seq,
+                latency_ms: started.elapsed().as_millis(),
+                value,
+                status,
+                error: None,
+            }
+        }
+        Err(e) => CommandOutcome {
+            command: display,
+            seq,
+            latency_ms: started.elapsed().as_millis(),
+            value: json!({"type": "nil", "value": null}),
+            status: "error".into(),
+            error: Some(format!("{}", e)),
+        },
+    }
+}
+
 /// Execute pre-tokenized commands on one multiplexed connection, invoking
 /// `on_result` as each command completes. A command error is recorded in
 /// its outcome; only transport-level failures (connect, protocol) bail.
@@ -56,46 +108,7 @@ where
     let mut con = client.get_multiplexed_async_connection().await?;
 
     for (i, tokens) in commands.iter().enumerate() {
-        let started = std::time::Instant::now();
-        let display = tokens.join(" ");
-        let outcome = if tokens.is_empty() {
-            CommandOutcome {
-                command: display,
-                seq: i + 1,
-                latency_ms: 0,
-                value: json!({"type": "nil", "value": null}),
-                status: String::new(),
-                error: Some("Empty command".into()),
-            }
-        } else {
-            let cmd_name = tokens[0].to_uppercase();
-            let mut cmd = redis::cmd(&cmd_name);
-            for arg in &tokens[1..] {
-                cmd.arg(arg.as_str());
-            }
-            match cmd.query_async::<redis::Value>(&mut con).await {
-                Ok(val) => {
-                    let value = redis_value_to_json(&val, &cmd_name, max_items, max_bytes);
-                    let status = status_text(&val);
-                    CommandOutcome {
-                        command: display,
-                        seq: i + 1,
-                        latency_ms: started.elapsed().as_millis(),
-                        value,
-                        status,
-                        error: None,
-                    }
-                }
-                Err(e) => CommandOutcome {
-                    command: display,
-                    seq: i + 1,
-                    latency_ms: started.elapsed().as_millis(),
-                    value: json!({"type": "nil", "value": null}),
-                    status: "error".into(),
-                    error: Some(format!("{}", e)),
-                },
-            }
-        };
+        let outcome = execute_command_on(&mut con, tokens, i + 1, max_items, max_bytes).await;
         on_result(&outcome);
     }
     Ok(())
