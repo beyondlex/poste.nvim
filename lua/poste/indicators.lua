@@ -9,13 +9,13 @@ local M = {}
 
 local indicator_ns = vim.api.nvim_create_namespace(C.INDICATOR_NS_NAME)
 local spinner_timer = nil
-local spinner_gen = 0
 
 local spinner_frames = C.SPINNER_FRAMES
 local sign_group = C.SIGN_GROUP_NAME .. "_indicator"
 
--- Track which lines have active spinner signs so they can be replaced/cleared
-local spinner_signs = {}  -- buf -> { line_0 = true }
+-- Track which lines have active spinner signs so they can be replaced/cleared.
+-- buf -> { line_0 = current_frame } (current_frame starts at 1)
+local spinner_signs = {}  -- buf -> { line_0 = frame }
 
 local function define_signs()
   for i, frame in ipairs(spinner_frames) do
@@ -26,17 +26,37 @@ local function define_signs()
 end
 define_signs()
 
+--- Unplace every indicator sign on the target line (0-based). sign_unplace's
+--- dict only honors `buffer` and `id` — `lnum` is silently ignored, so passing
+--- it would delete ALL signs in the group on the buffer, wiping sibling
+--- indicators (e.g. other statements in a multi-statement run).
+local function unplace_sign_at_line(buf, line_0)
+  local lnum = line_0 + 1
+  local placed = vim.fn.sign_getplaced(buf, { group = sign_group })
+  for _, s in ipairs(placed[1].signs) do
+    if s.lnum == lnum then
+      vim.fn.sign_unplace(sign_group, { buffer = buf, id = s.id })
+    end
+  end
+end
+
 local function place_sign(buf, line_0, name)
-  vim.fn.sign_unplace(sign_group, { buffer = buf, lnum = line_0 + 1 })
+  unplace_sign_at_line(buf, line_0)
   vim.fn.sign_place(0, sign_group, name, buf, { lnum = line_0 + 1 })
 end
 
 local function unplace_sign(buf, line_0)
-  vim.fn.sign_unplace(sign_group, { buffer = buf, lnum = line_0 + 1 })
+  unplace_sign_at_line(buf, line_0)
+end
+
+local function any_active_spinners()
+  for buf, lines in pairs(spinner_signs) do
+    if next(lines) then return true end
+  end
+  return false
 end
 
 local function stop_timer()
-  spinner_gen = spinner_gen + 1
   if spinner_timer then
     spinner_timer:stop()
     spinner_timer:close()
@@ -44,17 +64,40 @@ local function stop_timer()
   end
 end
 
+-- One shared timer advances the frame on EVERY active spinner line, so a
+-- multi-statement run can spin several signs at once (a per-line timer would
+-- be stopped by the next set_indicator call and freeze earlier spinners).
+local function start_timer()
+  if spinner_timer then return end
+  spinner_timer = uv.new_timer()
+  spinner_timer:start(C.SPINNER_INTERVAL_MS, C.SPINNER_INTERVAL_MS, vim.schedule_wrap(function()
+    for buf, lines in pairs(spinner_signs) do
+      if not vim.api.nvim_buf_is_valid(buf) then
+        spinner_signs[buf] = nil
+      else
+        for line_0, frame in pairs(lines) do
+          frame = (frame % #spinner_frames) + 1
+          lines[line_0] = frame
+          place_sign(buf, line_0, "PosteSpin" .. frame)
+        end
+      end
+    end
+    if not any_active_spinners() then stop_timer() end
+  end))
+end
+
 --- Clear all indicators for a buffer.
 function M.clear_all(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
   vim.api.nvim_buf_clear_namespace(buf, indicator_ns, 0, -1)
-  if spinner_signs[buf] then
-    for line_0 in pairs(spinner_signs[buf]) do
-      unplace_sign(buf, line_0)
-    end
-    spinner_signs[buf] = {}
+  -- Unplace every sign in the indicator group on this buffer (success/error
+  -- signs too, which are never tracked in spinner_signs).
+  local placed = vim.fn.sign_getplaced(buf, { group = sign_group })
+  for _, s in ipairs(placed[1].signs) do
+    vim.fn.sign_unplace(sign_group, { buffer = buf, id = s.id })
   end
-  stop_timer()
+  spinner_signs[buf] = nil
+  if not any_active_spinners() then stop_timer() end
 end
 
 --- Clear indicators for all lines except the current one.
@@ -108,24 +151,11 @@ function M.set_indicator(buf, line_0, status, latency_ms, assertion_results)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
   if not line_0 then return end
 
-  stop_timer()
-  spinner_gen = spinner_gen + 1
-  local my_gen = spinner_gen
-
   if status == "running" then
     if not spinner_signs[buf] then spinner_signs[buf] = {} end
-    spinner_signs[buf][line_0] = true
+    spinner_signs[buf][line_0] = 1
     place_sign(buf, line_0, "PosteSpin1")
-
-    local frame = 1
-    spinner_timer = uv.new_timer()
-    spinner_timer:start(C.SPINNER_INTERVAL_MS, C.SPINNER_INTERVAL_MS, vim.schedule_wrap(function()
-      if my_gen ~= spinner_gen then return end
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      if not (spinner_signs[buf] and spinner_signs[buf][line_0]) then return end
-      frame = (frame % #spinner_frames) + 1
-      place_sign(buf, line_0, "PosteSpin" .. frame)
-    end))
+    start_timer()
 
   elseif status == "success" or status == "error" then
     unplace_sign(buf, line_0)

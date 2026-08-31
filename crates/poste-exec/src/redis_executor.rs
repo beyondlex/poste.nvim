@@ -236,8 +236,33 @@ pub fn redis_value_to_json(
             let truncated = len > max_items;
             let shown_len = len.min(max_items);
 
-            let inferred_type = match cmd_name.to_uppercase().as_str() {
-                "HGETALL" | "HSCAN" => "hash",
+            // SCAN-family replies are [cursor, items[]] — surface the cursor
+            // and recurse on the items so the Lua side can page through
+            // HSCAN/SSCAN/ZSCAN (P1-3 large-collection navigation).
+            let upper_cmd = cmd_name.to_uppercase();
+            if upper_cmd == "SCAN" || upper_cmd == "HSCAN" || upper_cmd == "SSCAN"
+                || upper_cmd == "ZSCAN" {
+                let cursor = key_string(&arr[0]).unwrap_or_else(|| "0".into());
+                let items = match arr.get(1) {
+                    Some(redis::Value::Array(inner)) => inner.clone(),
+                    _ => Vec::new(),
+                };
+                let mut out = redis_value_to_json(
+                    &redis::Value::Array(items),
+                    // HSCAN's items are flat field/value pairs → hash shape;
+                    // SCAN/SSCAN items are bare keys → list shape.
+                    if upper_cmd == "HSCAN" { "HGETALL" } else { "KEYS" },
+                    max_items,
+                    max_bytes,
+                );
+                if let Some(obj) = out.as_object_mut() {
+                    obj.insert("cursor".into(), json!(cursor));
+                }
+                return out;
+            }
+
+            let inferred_type = match upper_cmd.as_str() {
+                "HGETALL" => "hash",
                 "LRANGE" | "LINDEX" | "LPOP" | "RPOP" => "list",
                 "SMEMBERS" | "SINTER" | "SUNION" | "SDIFF" | "SRANDMEMBER" => "set",
                 "ZRANGE" | "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZPOPMIN" | "ZPOPMAX" => "zset",
@@ -512,6 +537,50 @@ mod tests {
         let out = redis_value_to_json(&redis::Value::Map(m.clone()), "XREAD", 100, 1024);
         assert_eq!(out["type"], "hash");
         assert_eq!(out["entries"], json!([["k", "v"]]));
+    }
+
+    #[test]
+    fn hscan_surfaces_cursor_and_parses_items() {
+        let arr = vec![
+            redis::Value::BulkString(b"17".to_vec()),
+            redis::Value::Array(vec![
+                redis::Value::BulkString(b"name".to_vec()),
+                redis::Value::BulkString(b"Alice".to_vec()),
+                redis::Value::BulkString(b"age".to_vec()),
+                redis::Value::BulkString(b"30".to_vec()),
+            ]),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "HSCAN", 100, 1024);
+        assert_eq!(out["cursor"], "17");
+        assert_eq!(out["type"], "hash");
+        assert_eq!(out["entries"], json!([["name", "Alice"], ["age", "30"]]));
+        assert_eq!(out["len"], 2);
+    }
+
+    #[test]
+    fn scan_surfaces_cursor_as_list() {
+        let arr = vec![
+            redis::Value::BulkString(b"0".to_vec()),
+            redis::Value::Array(vec![
+                redis::Value::BulkString(b"user:1".to_vec()),
+                redis::Value::BulkString(b"user:2".to_vec()),
+            ]),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "SCAN", 100, 1024);
+        assert_eq!(out["cursor"], "0");
+        assert_eq!(out["type"], "list");
+        assert_eq!(out["value"], json!(["user:1", "user:2"]));
+    }
+
+    #[test]
+    fn hscan_empty_items_keeps_cursor() {
+        let arr = vec![
+            redis::Value::BulkString(b"0".to_vec()),
+            redis::Value::Array(vec![]),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "HSCAN", 100, 1024);
+        assert_eq!(out["cursor"], "0");
+        assert_eq!(out["len"], 0);
     }
 
     #[tokio::test]
