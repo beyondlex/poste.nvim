@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use serde_json::{json, Value};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// Persistent redis session: keeps one connection open across requests so
@@ -40,6 +41,18 @@ pub async fn execute(args: RedisSessionArgs) -> Result<()> {
 
     let client = redis::Client::open(args.connection.as_str())?;
     let mut con = client.get_multiplexed_async_connection().await?;
+    // The db the shared connection is currently SELECTed to (Lua steers it
+    // with fire-and-forget SELECTs); restored after a reconnect.
+    let mut current_db: Option<i64> = None;
+
+    // Per-command bound: when the TCP connection dies mid-stream (docker's
+    // userland proxy drops connections under burst load, network blips), a
+    // multiplexed-command future may never resolve and the session would
+    // hang forever — no response, no error, every later request queued
+    // behind it. Bound each attempt; on timeout rebuild the connection,
+    // restore SELECT state, and retry the command once.
+    const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+    const RECONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
     let mut stdout = tokio::io::stdout();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -71,14 +84,69 @@ pub async fn execute(args: RedisSessionArgs) -> Result<()> {
             continue;
         }
 
-        let outcome = execute_command_on(
-            &mut con,
-            &tokens,
-            seq,
-            args.max_items as usize,
-            args.max_bytes as usize,
+        let max_items = args.max_items as usize;
+        let max_bytes = args.max_bytes as usize;
+        let mut attempt = tokio::time::timeout(
+            COMMAND_TIMEOUT,
+            execute_command_on(&mut con, &tokens, seq, max_items, max_bytes),
         )
         .await;
+        // A dead connection surfaces either as a hang (timeout) or as an
+        // immediate connection-class error from the multiplexed driver.
+        // Either way: rebuild the connection, restore the tracked SELECT
+        // state, and retry the command once.
+        let needs_rescue = match &attempt {
+            Err(_) => true,
+            Ok(outcome) => match &outcome.error {
+                Some(err) => {
+                    let e = err.to_lowercase();
+                    e.contains("connection") || e.contains("broken") || e.contains("dropped")
+                }
+                None => false,
+            },
+        };
+        if needs_rescue {
+            let rebuilt = tokio::time::timeout(
+                RECONNECT_TIMEOUT,
+                client.get_multiplexed_async_connection(),
+            )
+            .await;
+            match rebuilt {
+                Ok(Ok(fresh)) => {
+                    con = fresh;
+                    if let Some(db) = current_db.filter(|d| *d != 0) {
+                        let _ = redis::cmd("SELECT")
+                            .arg(db.to_string())
+                            .query_async::<String>(&mut con)
+                            .await;
+                    }
+                    attempt = tokio::time::timeout(
+                        COMMAND_TIMEOUT,
+                        execute_command_on(&mut con, &tokens, seq, max_items, max_bytes),
+                    )
+                    .await;
+                }
+                _ => {} // reconnect failed: fall through to the error outcome
+            }
+        }
+        let mut outcome = match attempt {
+            Ok(outcome) => outcome,
+            Err(_) => poste_exec::redis_executor::CommandOutcome {
+                command: tokens.join(" "),
+                seq,
+                latency_ms: 0,
+                value: json!({"type": "nil", "value": null}),
+                status: "error".into(),
+                error: Some("redis connection lost (command timed out)".into()),
+            },
+        };
+        if outcome.error.is_none()
+            && tokens.first().map(|t| t.to_uppercase() == "SELECT").unwrap_or(false)
+        {
+            if let Some(db) = tokens.get(1).and_then(|t| t.parse::<i64>().ok()) {
+                current_db = Some(db);
+            }
+        }
 
         let mut ev = json!({
             "type": "result",
