@@ -251,9 +251,11 @@ pub fn redis_value_to_json(
                     &redis::Value::Array(items),
                     // HSCAN's items are flat field/value pairs → hash shape;
                     // ZSCAN's items are member/score pairs → zset shape;
-                    // SCAN/SSCAN items are bare keys → list shape.
+                    // SSCAN's items are bare members → set shape;
+                    // SCAN items are bare keys → list shape.
                     if upper_cmd == "HSCAN" { "HGETALL" }
                     else if upper_cmd == "ZSCAN" { "ZRANGE" }
+                    else if upper_cmd == "SSCAN" { "SMEMBERS" }
                     else { "KEYS" },
                     max_items,
                     max_bytes,
@@ -605,6 +607,23 @@ mod tests {
             out["value"],
             json!([{"member": "alice", "score": 99.0}, {"member": "bob", "score": 87.0}])
         );
+    }
+
+    #[test]
+    fn sscan_surfaces_cursor_and_parses_set() {
+        let arr = vec![
+            redis::Value::BulkString(b"0".to_vec()),
+            redis::Value::Array(vec![
+                redis::Value::BulkString(b"vim".to_vec()),
+                redis::Value::BulkString(b"lua".to_vec()),
+                redis::Value::BulkString(b"redis".to_vec()),
+            ]),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "SSCAN", 100, 1024);
+        assert_eq!(out["cursor"], "0");
+        assert_eq!(out["type"], "set");
+        assert_eq!(out["len"], 3);
+        assert_eq!(out["value"], json!(["vim", "lua", "redis"]));
     }
 
     #[tokio::test]
