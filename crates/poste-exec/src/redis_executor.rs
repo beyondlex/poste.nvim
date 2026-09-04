@@ -268,7 +268,7 @@ pub fn redis_value_to_json(
                 "HGETALL" => "hash",
                 "LRANGE" | "LINDEX" | "LPOP" | "RPOP" => "list",
                 "SMEMBERS" | "SINTER" | "SUNION" | "SDIFF" | "SRANDMEMBER" => "set",
-                "ZRANGE" | "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZPOPMIN" | "ZPOPMAX" => "zset",
+                "ZRANGE" | "ZREVRANGE" | "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZPOPMIN" | "ZPOPMAX" => "zset",
                 "XRANGE" | "XREVRANGE" | "XREAD" | "XREADGROUP" => "stream",
                 // KEYS always returns keys — never let the even-count
                 // heuristic misread them as field-value pairs
