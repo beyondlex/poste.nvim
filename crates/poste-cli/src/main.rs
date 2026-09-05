@@ -5,6 +5,7 @@ mod connection;
 mod context;
 mod exec_file;
 mod introspect;
+mod mq_exec;
 mod redis_exec;
 mod redis_session;
 mod session;
@@ -46,6 +47,8 @@ enum Commands {
     RedisExec(redis_exec::RedisExecArgs),
     /// Persistent redis session (keeps one connection open across requests)
     RedisSession(redis_session::RedisSessionArgs),
+    /// Execute pre-decoded AMQP operations (stdin JSON: {connection, operations})
+    MqExec(mq_exec::MqExecArgs),
 }
 
 #[tokio::main]
@@ -84,6 +87,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::RedisSession(args)) => {
             redis_session::execute(args).await?;
+        }
+        Some(Commands::MqExec(args)) => {
+            mq_exec::execute(args).await?;
         }
         None => {}
     }
