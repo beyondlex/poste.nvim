@@ -329,12 +329,132 @@ impl Dialect for SqliteDialect {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SQL Server
+// ---------------------------------------------------------------------------
+
+pub struct MssqlDialect;
+
+impl Dialect for MssqlDialect {
+    fn name(&self) -> &str {
+        "mssql"
+    }
+
+    fn list_databases(&self) -> &str {
+        "SELECT name FROM sys.databases \
+         WHERE database_id > 4 AND state_desc = 'ONLINE' ORDER BY name"
+    }
+
+    fn list_schemas(&self) -> Option<&str> {
+        Some(
+            "SELECT schema_name FROM information_schema.schemata \
+             WHERE schema_name NOT IN ('guest', 'INFORMATION_SCHEMA', 'sys', \
+             'db_owner', 'db_accessadmin', 'db_securityadmin', 'db_ddladmin', \
+             'db_backupoperator', 'db_datareader', 'db_datawriter', \
+             'db_denydatareader', 'db_denydatawriter') \
+             ORDER BY schema_name",
+        )
+    }
+
+    /// `{}` placeholders are inlined (escaped) by the mssql introspect driver,
+    /// mirroring the mysql/sqlite drivers — tiberius has no sqlx-style binding.
+    fn list_tables(&self) -> &str {
+        "SELECT t.TABLE_NAME AS table_name, t.TABLE_TYPE AS table_type \
+         FROM information_schema.tables t \
+         WHERE t.TABLE_SCHEMA = '{}' ORDER BY t.TABLE_NAME"
+    }
+
+    fn list_columns(&self) -> &str {
+        "SELECT COLUMN_NAME AS column_name, DATA_TYPE AS data_type, \
+                IS_NULLABLE AS is_nullable, COLUMN_DEFAULT AS column_default, \
+                CHARACTER_MAXIMUM_LENGTH AS character_maximum_length \
+         FROM information_schema.columns \
+         WHERE TABLE_SCHEMA = '{}' AND TABLE_NAME = '{}' \
+         ORDER BY ORDINAL_POSITION"
+    }
+
+    fn list_indexes(&self) -> &str {
+        "SELECT i.name AS index_name, i.is_unique AS is_unique, \
+                i.is_primary_key AS is_primary_key, c.name AS column_name, \
+                ic.is_descending_key AS is_descending \
+         FROM sys.indexes i \
+         JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id \
+         JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id \
+         JOIN sys.tables t ON i.object_id = t.object_id \
+         JOIN sys.schemas s ON t.schema_id = s.schema_id \
+         WHERE s.name = '{}' AND t.name = '{}' AND i.name IS NOT NULL \
+         ORDER BY i.name, ic.key_ordinal"
+    }
+
+    fn describe_table(&self) -> &str {
+        self.list_columns()
+    }
+
+    fn supports_schema(&self) -> bool {
+        true
+    }
+
+    fn quote_identifier(&self, name: &str) -> String {
+        format!("[{}]", name.replace(']', "]]"))
+    }
+
+    fn default_port(&self) -> u16 {
+        1433
+    }
+
+    fn type_mapping<'a>(&self, col_type: &'a str) -> &'a str {
+        let upper = col_type.to_uppercase();
+        if upper == "BIT" {
+            "boolean"
+        } else if upper == "TINYINT" {
+            "tinyint"
+        } else if upper == "SMALLINT" {
+            "smallint"
+        } else if upper == "INT" {
+            "int"
+        } else if upper == "BIGINT" {
+            "bigint"
+        } else if upper == "FLOAT" {
+            "float"
+        } else if upper == "REAL" {
+            "real"
+        } else if upper == "DECIMAL" || upper == "NUMERIC" {
+            "decimal"
+        } else if upper == "SMALLMONEY" || upper == "MONEY" {
+            "money"
+        } else if upper == "DATETIME2" || upper == "DATETIME" || upper == "SMALLDATETIME" {
+            "datetime"
+        } else if upper == "DATE" {
+            "date"
+        } else if upper == "TIME" {
+            "time"
+        } else if upper == "DATETIMEOFFSET" {
+            "datetimeoffset"
+        } else if upper == "UNIQUEIDENTIFIER" {
+            "uuid"
+        } else if upper == "NVARCHAR" || upper == "NCHAR" {
+            "nvarchar"
+        } else if upper == "VARCHAR" || upper == "CHAR" {
+            "varchar"
+        } else if upper == "TEXT" || upper == "NTEXT" {
+            "text"
+        } else if upper == "XML" {
+            "xml"
+        } else if upper.contains("BINARY") || upper == "IMAGE" {
+            "blob"
+        } else {
+            col_type
+        }
+    }
+}
+
 /// Get the appropriate Dialect for a given protocol.
 /// Returns `None` for non-SQL protocols.
 pub fn dialect_for(protocol: &Protocol) -> Option<Box<dyn Dialect>> {
     match protocol {
         Protocol::Postgres => Some(Box::new(PostgresDialect)),
         Protocol::Mysql => Some(Box::new(MysqlDialect)),
+        Protocol::Mssql => Some(Box::new(MssqlDialect)),
         Protocol::Sqlite => Some(Box::new(SqliteDialect)),
         _ => None,
     }
@@ -401,9 +521,30 @@ mod tests {
     }
 
     #[test]
+    fn test_mssql_dialect() {
+        let d = MssqlDialect;
+        assert_eq!(d.name(), "mssql");
+        assert!(d.supports_schema());
+        assert_eq!(d.default_port(), 1433);
+        assert_eq!(d.quote_identifier("users"), "[users]");
+        assert_eq!(d.quote_identifier("my]table"), "[my]]table]");
+        assert!(d.list_schemas().is_some());
+        assert!(d.list_databases().contains("sys.databases"));
+        assert!(d.list_tables().contains("information_schema.tables"));
+        assert!(d.list_columns().contains("ORDINAL_POSITION"));
+        assert!(d.list_indexes().contains("sys.index_columns"));
+        assert_eq!(d.type_mapping("BIT"), "boolean");
+        assert_eq!(d.type_mapping("NVARCHAR"), "nvarchar");
+        assert_eq!(d.type_mapping("datetime2"), "datetime");
+        assert_eq!(d.type_mapping("UNIQUEIDENTIFIER"), "uuid");
+        assert_eq!(d.type_mapping("ROWVERSION"), "ROWVERSION");
+    }
+
+    #[test]
     fn test_dialect_for() {
         assert!(dialect_for(&Protocol::Postgres).is_some());
         assert!(dialect_for(&Protocol::Mysql).is_some());
+        assert!(dialect_for(&Protocol::Mssql).is_some());
         assert!(dialect_for(&Protocol::Sqlite).is_some());
         assert!(dialect_for(&Protocol::Http).is_none());
         assert!(dialect_for(&Protocol::Redis).is_none());

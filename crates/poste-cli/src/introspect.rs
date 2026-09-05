@@ -28,6 +28,8 @@ pub async fn execute(args: IntrospectArgs) -> Result<()> {
         "sqlite".to_string()
     } else if connection_url.starts_with("mysql://") {
         "mysql".to_string()
+    } else if connection_url.starts_with("mssql://") {
+        "mssql".to_string()
     } else {
         "postgres".to_string()
     };

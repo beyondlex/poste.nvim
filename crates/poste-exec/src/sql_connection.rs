@@ -124,13 +124,13 @@ impl ConnectionConfig {
                     format!("sqlite:{}?mode=rwc", path)
                 }
             }
-            "postgres" | "mysql" => {
+            "postgres" | "mysql" | "mssql" => {
                 let scheme = self.dialect.as_str();
                 let host = self.host.as_deref().unwrap_or("localhost");
                 let default_port = match scheme {
                     "postgres" => 5432,
                     "mysql" => 3306,
-                    _ => 0,
+                    _ => 1433,
                 };
                 let port = self.port.unwrap_or(default_port);
                 let db = self.database.as_deref().unwrap_or("");
@@ -311,6 +311,21 @@ pub async fn test_connection(config: &ConnectionConfig) -> Result<String> {
                 .connect(&url)
                 .await?;
             pool.close().await;
+            Ok("OK".to_string())
+        }
+        "mssql" => {
+            let mut client = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                crate::sql_executor::mssql::connect_mssql(&url),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("MSSQL connection timed out"))??;
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                client.simple_query("SELECT 1"),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("MSSQL probe timed out"))??;
             Ok("OK".to_string())
         }
         other => anyhow::bail!("Unknown dialect: {}", other),

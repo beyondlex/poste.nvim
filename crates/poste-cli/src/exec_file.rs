@@ -76,6 +76,8 @@ where
         poste_core::Protocol::Sqlite
     } else if connection_url.starts_with("mysql://") {
         poste_core::Protocol::Mysql
+    } else if connection_url.starts_with("mssql://") {
+        poste_core::Protocol::Mssql
     } else if connection_url.starts_with("postgres://")
         || connection_url.starts_with("postgresql://")
     {
@@ -302,6 +304,22 @@ where
             )
             .await?;
         }
+        poste_core::Protocol::Mssql => {
+            exec_mssql(
+                connection_url,
+                statements,
+                mode,
+                timeout_secs,
+                max_rows,
+                total,
+                emit,
+                &mut succeeded,
+                &mut failed,
+                &mut total_rows,
+                &mut total_affected,
+            )
+            .await?;
+        }
         _ => anyhow::bail!("Not a SQL protocol: {:?}", protocol),
     }
 
@@ -309,6 +327,7 @@ where
     let dialect = match protocol {
         poste_core::Protocol::Postgres => "postgres",
         poste_core::Protocol::Mysql => "mysql",
+        poste_core::Protocol::Mssql => "mssql",
         poste_core::Protocol::Sqlite => "sqlite",
         _ => "unknown",
     };
@@ -515,6 +534,133 @@ where
 
     drop(conn);
     pool.close().await;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn exec_mssql<F>(
+    connection_url: &str,
+    statements: &[String],
+    mode: &str,
+    timeout_secs: u64,
+    max_rows: u64,
+    total: u64,
+    emit: &mut F,
+    succeeded: &mut u64,
+    failed: &mut u64,
+    total_rows: &mut u64,
+    total_affected: &mut u64,
+) -> Result<()>
+where
+    F: FnMut(&str),
+{
+    use poste_exec::sql_executor::mssql;
+
+    let mut client = mssql::connect_mssql(connection_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("SQL Server connection failed: {}", e))?;
+
+    let mut in_transaction = false;
+    if mode == "transaction" {
+        mssql::mssql_batch(&mut client, "BEGIN TRANSACTION", timeout_secs).await?;
+        in_transaction = true;
+    }
+
+    for (seq, stmt) in statements.iter().enumerate() {
+        let seq = seq as u64 + 1;
+        let stmt_trimmed = stmt.trim();
+
+        if stmt_trimmed.is_empty() || stmt_trimmed.to_uppercase().starts_with("USE ") {
+            continue;
+        }
+
+        let progress = json!({
+            "type": "progress",
+            "seq": seq,
+            "total": total,
+            "sql": stmt_trimmed,
+        });
+        emit(&progress.to_string());
+
+        let stmt_start = Instant::now();
+
+        let stmt_result: anyhow::Result<StatementResult> = async {
+            if mssql::is_query_stmt(stmt_trimmed) {
+                let (columns, json_rows) =
+                    mssql::mssql_query(&mut client, stmt_trimmed, timeout_secs).await?;
+                let elapsed = stmt_start.elapsed().as_millis() as u64;
+                let row_count = json_rows.len() as u64;
+                let truncated = max_rows > 0 && row_count > max_rows;
+                let display_rows = if max_rows > 0 {
+                    std::cmp::min(row_count, max_rows) as usize
+                } else {
+                    json_rows.len()
+                };
+                Ok((
+                    columns,
+                    json_rows.into_iter().take(display_rows).collect(),
+                    row_count,
+                    elapsed,
+                    truncated,
+                    false,
+                    0,
+                ))
+            } else {
+                let affected = mssql::mssql_execute(&mut client, stmt_trimmed, timeout_secs).await?;
+                *total_affected += affected;
+                let elapsed = stmt_start.elapsed().as_millis() as u64;
+                Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true, affected))
+            }
+        }
+        .await;
+
+        match stmt_result {
+            Ok((columns, json_rows, row_count, elapsed, truncated, is_dml, affected)) => {
+                *succeeded += 1;
+                *total_rows += row_count;
+
+                let result_obj = json!({
+                    "type": "result",
+                    "seq": seq,
+                    "total": total,
+                    "status": "ok",
+                    "sql": stmt_trimmed,
+                    "row_count": row_count,
+                    "affected_rows": if is_dml { json!(affected) } else { serde_json::Value::Null },
+                    "execution_time_ms": elapsed,
+                    "columns": columns,
+                    "rows": json_rows,
+                    "rows_truncated": truncated,
+                });
+                emit(&result_obj.to_string());
+            }
+            Err(e) => {
+                *failed += 1;
+                if in_transaction {
+                    mssql::mssql_batch(&mut client, "ROLLBACK", timeout_secs).await.ok();
+                    in_transaction = false;
+                }
+                let result_obj = json!({
+                    "type": "result",
+                    "seq": seq,
+                    "total": total,
+                    "status": "error",
+                    "sql": stmt_trimmed,
+                    "error": format!("{}", e),
+                    "execution_time_ms": 0,
+                });
+                emit(&result_obj.to_string());
+                if mode == "transaction" {
+                    break;
+                }
+            }
+        }
+    }
+
+    if in_transaction {
+        mssql::mssql_batch(&mut client, "COMMIT", timeout_secs).await.ok();
+    }
+
     Ok(())
 }
 

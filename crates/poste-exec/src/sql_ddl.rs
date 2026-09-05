@@ -401,11 +401,111 @@ impl DdlGenerator for SqliteDdl {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SQL Server
+// ---------------------------------------------------------------------------
+
+pub struct MssqlDdl;
+
+impl DdlGenerator for MssqlDdl {
+    fn create_table(&self, schema: &TableSchema) -> String {
+        use crate::sql_dialect::MssqlDialect;
+        let d = MssqlDialect;
+        let q = |name: &str| d.quote_identifier(name);
+
+        let mut cols: Vec<String> = schema
+            .columns
+            .iter()
+            .map(|c| format!("  {}", column_def_sql(c, &q)))
+            .collect();
+
+        if let Some(ref pk) = schema.primary_key {
+            let pk_cols: Vec<String> = pk.iter().map(|c| q(c)).collect();
+            cols.push(format!("  PRIMARY KEY ({})", pk_cols.join(", ")));
+        }
+
+        format!(
+            "CREATE TABLE {} (\n{}\n);",
+            q(&schema.name),
+            cols.join(",\n")
+        )
+    }
+
+    fn add_column(&self, table: &str, column: &ColumnDef) -> String {
+        use crate::sql_dialect::MssqlDialect;
+        let d = MssqlDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        // T-SQL has no ADD COLUMN keyword
+        format!(
+            "ALTER TABLE {} ADD {};",
+            q(table),
+            column_def_sql(column, &q)
+        )
+    }
+
+    fn drop_column(&self, table: &str, column: &str) -> String {
+        use crate::sql_dialect::MssqlDialect;
+        let d = MssqlDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        format!("ALTER TABLE {} DROP COLUMN {};", q(table), q(column))
+    }
+
+    fn rename_column(&self, table: &str, old: &str, new: &str) -> String {
+        use crate::sql_dialect::MssqlDialect;
+        let d = MssqlDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        // T-SQL renames go through the sp_rename system procedure
+        format!(
+            "EXEC sp_rename '{}.{}', '{}', 'COLUMN';",
+            q(table),
+            q(old),
+            new.replace('\'', "''")
+        )
+    }
+
+    fn alter_column_type(&self, table: &str, column: &str, new_type: &str) -> String {
+        use crate::sql_dialect::MssqlDialect;
+        let d = MssqlDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        format!(
+            "ALTER TABLE {} ALTER COLUMN {} {};",
+            q(table),
+            q(column),
+            new_type
+        )
+    }
+
+    fn add_index(&self, table: &str, columns: &[&str], unique: bool) -> String {
+        use crate::sql_dialect::MssqlDialect;
+        let d = MssqlDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        let unique_kw = if unique { "UNIQUE " } else { "" };
+        let col_list: Vec<String> = columns.iter().map(|c| q(c)).collect();
+        let index_name = format!("idx_{}_{}", table, columns.join("_"));
+        format!(
+            "CREATE {}INDEX {} ON {} ({});",
+            unique_kw,
+            q(&index_name),
+            q(table),
+            col_list.join(", ")
+        )
+    }
+
+    fn drop_table(&self, table: &str, _cascade: bool) -> String {
+        use crate::sql_dialect::MssqlDialect;
+        let d = MssqlDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        // SQL Server does not support CASCADE
+        format!("DROP TABLE {};", q(table))
+    }
+}
+
 /// Get a DdlGenerator for the given dialect name.
 pub fn ddl_for(dialect: &str) -> Option<Box<dyn DdlGenerator>> {
     match dialect {
         "postgres" => Some(Box::new(PostgresDdl)),
         "mysql" => Some(Box::new(MysqlDdl)),
+        "mssql" => Some(Box::new(MssqlDdl)),
         "sqlite" => Some(Box::new(SqliteDdl)),
         _ => None,
     }

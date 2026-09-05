@@ -30,3 +30,5 @@ chrono = "0.4"
 rand = "0.8"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "mysql", "sqlite", "json", "chrono", "uuid", "ipnetwork", "rust_decimal"] }
 rust_decimal = "1"
+tiberius = { version = "0.12", default-features = false, features = ["rustls", "chrono", "tds73", "rust_decimal"] }
+tokio-util = { version = "0.7", features = ["compat"] }

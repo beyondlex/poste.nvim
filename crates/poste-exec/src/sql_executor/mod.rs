@@ -9,6 +9,9 @@ mod postgres;
 mod sqlite;
 mod value;
 
+// Reused by poste-cli's exec-file / session loops and the introspect driver.
+pub mod mssql;
+
 use crate::response::Response;
 use crate::sql_dialect;
 use anyhow::Result;
@@ -51,6 +54,7 @@ pub async fn execute_sql(request: &Request, timeout_secs: u64) -> Result<Respons
     match request.protocol {
         Protocol::Postgres => postgres::execute_postgres(&parsed, timeout_secs).await,
         Protocol::Mysql => mysql::execute_mysql(&parsed, timeout_secs).await,
+        Protocol::Mssql => mssql::execute_mssql(&parsed, timeout_secs).await,
         Protocol::Sqlite => sqlite::execute_sqlite(&parsed, timeout_secs).await,
         _ => anyhow::bail!("Not a SQL protocol: {:?}", request.protocol),
     }
@@ -65,6 +69,7 @@ fn make_response(
     let proto_name = match protocol {
         Protocol::Postgres => "postgres",
         Protocol::Mysql => "mysql",
+        Protocol::Mssql => "mssql",
         Protocol::Sqlite => "sqlite",
         _ => "sql",
     };

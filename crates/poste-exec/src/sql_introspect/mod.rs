@@ -4,6 +4,7 @@
 //! tables, columns, and indexes. Uses the `Dialect` trait from `sql_dialect.rs`
 //! for SQL generation and handles per-dialect parameter binding differences.
 
+mod mssql;
 mod mysql;
 mod postgres;
 mod sqlite;
@@ -72,6 +73,7 @@ pub async fn introspect(params: &IntrospectParams) -> Result<Value> {
     match params.dialect_name.as_str() {
         "postgres" => postgres::introspect_postgres(params).await,
         "mysql" => mysql::introspect_mysql(params).await,
+        "mssql" => mssql::introspect_mssql(params).await,
         "sqlite" => sqlite::introspect_sqlite(params).await,
         other => anyhow::bail!("Unknown dialect: {}", other),
     }

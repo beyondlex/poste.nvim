@@ -6,6 +6,7 @@ pub enum Protocol {
     Redis,
     Mysql,
     Postgres,
+    Mssql,
     Sqlite,
 }
 
