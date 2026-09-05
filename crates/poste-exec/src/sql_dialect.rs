@@ -474,13 +474,15 @@ impl Dialect for ClickHouseDialect {
     }
 
     fn list_columns(&self) -> &str {
-        "SELECT name, type, is_nullable, default_expression \
+        // CH 26.x dropped system.columns.is_nullable — nullable is inferred
+        // from the type (`Nullable(...)` prefix).
+        "SELECT name, type, default_expression \
          FROM system.columns WHERE database = '{}' AND table = '{}' \
          ORDER BY position"
     }
 
     fn list_indexes(&self) -> &str {
-        "SELECT name, expression FROM system.data_skipping_indices \
+        "SELECT name, expr, type FROM system.data_skipping_indices \
          WHERE database = '{}' AND table = '{}' ORDER BY name"
     }
 

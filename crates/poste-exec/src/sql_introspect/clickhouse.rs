@@ -64,7 +64,7 @@ pub(super) async fn introspect_clickhouse(params: &IntrospectParams) -> Result<V
                 .collect()
         }
         IntrospectType::Columns => {
-            let db = (database(&client)).to_string();
+            let db = database(&client).to_string();
             let table = params.table.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("table parameter required for columns introspection")
             })?;
@@ -73,11 +73,12 @@ pub(super) async fn introspect_clickhouse(params: &IntrospectParams) -> Result<V
                 .await?
                 .into_iter()
                 .map(|r| {
+                    let col_type = cell(&r, 1).as_str().unwrap_or("");
                     json!({
                         "name": cell(&r, 0),
                         "type": cell(&r, 1),
-                        "nullable": cell(&r, 2).as_u64().unwrap_or(0) == 1,
-                        "default": if cell(&r, 3).is_null() { Value::Null } else { json!(cell(&r, 3).as_str().unwrap_or("")) },
+                        "nullable": col_type.starts_with("Nullable("),
+                        "default": cell(&r, 2),
                         "max_length": Value::Null,
                         "comment": Value::Null,
                         "fk_table": Value::Null,
@@ -87,7 +88,7 @@ pub(super) async fn introspect_clickhouse(params: &IntrospectParams) -> Result<V
                 .collect()
         }
         IntrospectType::Indexes => {
-            let db = (database(&client)).to_string();
+            let db = database(&client).to_string();
             let table = params.table.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("table parameter required for indexes introspection")
             })?;
@@ -96,11 +97,12 @@ pub(super) async fn introspect_clickhouse(params: &IntrospectParams) -> Result<V
                 .await?
                 .into_iter()
                 .map(|r| {
+                    let expr = cell(&r, 1).as_str().unwrap_or("");
                     json!({
                         "name": cell(&r, 0),
-                        "definition": format!("data skipping index on ({})", cell(&r, 1).as_str().unwrap_or("")),
+                        "definition": format!("data skipping index ({}) on ({})", expr, cell(&r, 2).as_str().unwrap_or("")),
                         "unique": false,
-                        "columns": vec![cell(&r, 1).clone()],
+                        "columns": vec![json!(expr)],
                     })
                 })
                 .collect()
@@ -181,13 +183,16 @@ async fn build_create_table(
 
     let columns: Vec<sql_ddl::ColumnDef> = col_rows
         .iter()
-        .map(|r| sql_ddl::ColumnDef {
-            name: cell(&r, 0).as_str().unwrap_or_default().to_string(),
-            col_type: cell(&r, 1).as_str().unwrap_or_default().to_string(),
-            nullable: cell(&r, 2).as_u64().unwrap_or(0) == 1,
-            default: cell(&r, 3).as_str().map(|s| s.to_string()),
-            comment: None,
-            extra: None,
+        .map(|r| {
+            let col_type = cell(&r, 1).as_str().unwrap_or_default().to_string();
+            sql_ddl::ColumnDef {
+                name: cell(&r, 0).as_str().unwrap_or_default().to_string(),
+                col_type,
+                nullable: cell(&r, 1).as_str().unwrap_or("").starts_with("Nullable("),
+                default: cell(&r, 2).as_str().map(|s| s.to_string()),
+                comment: None,
+                extra: None,
+            }
         })
         .collect();
 
