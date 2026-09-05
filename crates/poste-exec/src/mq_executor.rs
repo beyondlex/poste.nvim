@@ -264,7 +264,7 @@ async fn op_publish(channel: &Channel, op: &Value) -> Result<Value> {
 
 /// One consumed message in canonical shape (management transport field names,
 /// so the two transports produce equivalent canonical responses — P1-3).
-fn delivery_to_message(delivery: &Delivery, queue_depth: u32) -> Value {
+pub fn delivery_to_message(delivery: &Delivery, queue_depth: u32) -> Value {
     let payload = String::from_utf8_lossy(&delivery.data).to_string();
     let mut message = json!({
         "exchange": delivery.exchange.as_str(),
@@ -484,7 +484,11 @@ async fn op_delete(channel: &Channel, op: &Value) -> Result<Value> {
     }
 }
 
-async fn execute_operation_on(channel: &Channel, op: &Value, seq: usize) -> MqOutcome {
+pub async fn execute_operation_on(
+    channel: &Channel,
+    op: &Value,
+    seq: usize,
+) -> MqOutcome {
     let started = std::time::Instant::now();
     let operation = op
         .get("op")

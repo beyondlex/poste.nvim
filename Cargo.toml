@@ -35,6 +35,7 @@ tokio-util = { version = "0.7", features = ["compat"] }
 # AMQP 0-9-1 for `poste mq-exec` (poste-mq.nvim M2). lapin is the mature
 # runtime-agnostic client; default tokio runtime matches redis tokio-comp.
 lapin = "2.5"
+futures = "0.3"
 # ClickHouse: SQL over HTTP. The official `clickhouse` crate is SELECT-only
 # (it appends ` FORMAT x` to the SQL text and forces readonly=1), so the
 # executor uses a raw reqwest transport instead — the first HTTP transport

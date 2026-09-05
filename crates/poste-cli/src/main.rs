@@ -6,6 +6,7 @@ mod context;
 mod exec_file;
 mod introspect;
 mod mq_exec;
+mod mq_session;
 mod redis_exec;
 mod redis_session;
 mod session;
@@ -49,6 +50,8 @@ enum Commands {
     RedisSession(redis_session::RedisSessionArgs),
     /// Execute pre-decoded AMQP operations (stdin JSON: {connection, operations})
     MqExec(mq_exec::MqExecArgs),
+    /// Persistent AMQP session with push consumers (poste-mq tail)
+    MqSession(mq_session::MqSessionArgs),
 }
 
 #[tokio::main]
@@ -90,6 +93,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::MqExec(args)) => {
             mq_exec::execute(args).await?;
+        }
+        Some(Commands::MqSession(args)) => {
+            mq_session::execute(args).await?;
         }
         None => {}
     }

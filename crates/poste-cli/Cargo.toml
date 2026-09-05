@@ -26,6 +26,9 @@ chrono.workspace = true
 rust_decimal.workspace = true
 uuid.workspace = true
 redis = { version = "0.27", features = ["tokio-comp"] }
+# AMQP session (mq-session push consumers)
+lapin.workspace = true
+futures.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
