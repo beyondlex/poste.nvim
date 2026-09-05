@@ -448,6 +448,104 @@ impl Dialect for MssqlDialect {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ClickHouse
+// ---------------------------------------------------------------------------
+
+pub struct ClickHouseDialect;
+
+impl Dialect for ClickHouseDialect {
+    fn name(&self) -> &str {
+        "clickhouse"
+    }
+
+    fn list_databases(&self) -> &str {
+        "SELECT name FROM system.databases WHERE name != 'system' ORDER BY name"
+    }
+
+    fn list_schemas(&self) -> Option<&str> {
+        // ClickHouse has no schema level — database IS the namespace.
+        None
+    }
+
+    fn list_tables(&self) -> &str {
+        "SELECT name, engine FROM system.tables \
+         WHERE database = '{}' AND is_temporary = 0 ORDER BY name"
+    }
+
+    fn list_columns(&self) -> &str {
+        "SELECT name, type, is_nullable, default_expression \
+         FROM system.columns WHERE database = '{}' AND table = '{}' \
+         ORDER BY position"
+    }
+
+    fn list_indexes(&self) -> &str {
+        "SELECT name, expression FROM system.data_skipping_indices \
+         WHERE database = '{}' AND table = '{}' ORDER BY name"
+    }
+
+    fn describe_table(&self) -> &str {
+        self.list_columns()
+    }
+
+    fn supports_schema(&self) -> bool {
+        false
+    }
+
+    fn quote_identifier(&self, name: &str) -> String {
+        format!("`{}`", name.replace('`', "``"))
+    }
+
+    fn default_port(&self) -> u16 {
+        8123
+    }
+
+    fn type_mapping<'a>(&self, col_type: &'a str) -> &'a str {
+        let upper = col_type.to_uppercase();
+        if upper == "BOOL" {
+            "boolean"
+        } else if upper.starts_with("UINT") {
+            "uint"
+        } else if upper.starts_with("INT") {
+            "int"
+        } else if upper == "FLOAT32" {
+            "float32"
+        } else if upper == "FLOAT64" {
+            "float64"
+        } else if upper == "STRING" || upper == "FIXEDSTRING" {
+            "string"
+        } else if upper == "DATE" {
+            "date"
+        } else if upper == "DATE32" {
+            "date32"
+        } else if upper == "DATETIME" {
+            "datetime"
+        } else if upper.starts_with("DATETIME64") {
+            "datetime64"
+        } else if upper == "UUID" {
+            "uuid"
+        } else if upper == "DECIMAL" || upper.starts_with("DECIMAL(") {
+            "decimal"
+        } else if upper == "ARRAY" || upper.starts_with("ARRAY(") {
+            "array"
+        } else if upper == "MAP" || upper.starts_with("MAP(") {
+            "map"
+        } else if upper == "TUPLE" || upper.starts_with("TUPLE(") {
+            "tuple"
+        } else if upper == "JSON" {
+            "json"
+        } else if upper == "ENUM8" || upper == "ENUM16" {
+            "enum"
+        } else if upper.starts_with("NULLABLE(") {
+            "nullable"
+        } else if upper.starts_with("LOWCARDINALITY(") {
+            "lowcardinality"
+        } else {
+            col_type
+        }
+    }
+}
+
 /// Get the appropriate Dialect for a given protocol.
 /// Returns `None` for non-SQL protocols.
 pub fn dialect_for(protocol: &Protocol) -> Option<Box<dyn Dialect>> {
@@ -455,6 +553,7 @@ pub fn dialect_for(protocol: &Protocol) -> Option<Box<dyn Dialect>> {
         Protocol::Postgres => Some(Box::new(PostgresDialect)),
         Protocol::Mysql => Some(Box::new(MysqlDialect)),
         Protocol::Mssql => Some(Box::new(MssqlDialect)),
+        Protocol::ClickHouse => Some(Box::new(ClickHouseDialect)),
         Protocol::Sqlite => Some(Box::new(SqliteDialect)),
         _ => None,
     }
@@ -541,10 +640,30 @@ mod tests {
     }
 
     #[test]
+    fn test_clickhouse_dialect() {
+        let d = ClickHouseDialect;
+        assert_eq!(d.name(), "clickhouse");
+        assert!(!d.supports_schema());
+        assert_eq!(d.default_port(), 8123);
+        assert_eq!(d.quote_identifier("users"), "`users`");
+        assert_eq!(d.quote_identifier("my`table"), "`my``table`");
+        assert!(d.list_schemas().is_none());
+        assert!(d.list_databases().contains("system.databases"));
+        assert!(d.list_tables().contains("system.tables"));
+        assert!(d.list_columns().contains("system.columns"));
+        assert_eq!(d.type_mapping("UInt64"), "uint");
+        assert_eq!(d.type_mapping("DateTime64(3)"), "datetime64");
+        assert_eq!(d.type_mapping("Nullable(String)"), "nullable");
+        assert_eq!(d.type_mapping("String"), "string");
+        assert_eq!(d.type_mapping("AggregateFunction(sum, UInt64)"), "AggregateFunction(sum, UInt64)");
+    }
+
+    #[test]
     fn test_dialect_for() {
         assert!(dialect_for(&Protocol::Postgres).is_some());
         assert!(dialect_for(&Protocol::Mysql).is_some());
         assert!(dialect_for(&Protocol::Mssql).is_some());
+        assert!(dialect_for(&Protocol::ClickHouse).is_some());
         assert!(dialect_for(&Protocol::Sqlite).is_some());
         assert!(dialect_for(&Protocol::Http).is_none());
         assert!(dialect_for(&Protocol::Redis).is_none());

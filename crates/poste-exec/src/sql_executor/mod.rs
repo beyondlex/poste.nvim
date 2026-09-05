@@ -11,6 +11,8 @@ mod value;
 
 // Reused by poste-cli's exec-file / session loops and the introspect driver.
 pub mod mssql;
+// First HTTP transport (ClickHouse); exec-file / session / introspect reuse it.
+pub mod clickhouse;
 
 use crate::response::Response;
 use crate::sql_dialect;
@@ -55,6 +57,7 @@ pub async fn execute_sql(request: &Request, timeout_secs: u64) -> Result<Respons
         Protocol::Postgres => postgres::execute_postgres(&parsed, timeout_secs).await,
         Protocol::Mysql => mysql::execute_mysql(&parsed, timeout_secs).await,
         Protocol::Mssql => mssql::execute_mssql(&parsed, timeout_secs).await,
+        Protocol::ClickHouse => clickhouse::execute_clickhouse(&parsed, timeout_secs).await,
         Protocol::Sqlite => sqlite::execute_sqlite(&parsed, timeout_secs).await,
         _ => anyhow::bail!("Not a SQL protocol: {:?}", request.protocol),
     }
@@ -70,6 +73,7 @@ fn make_response(
         Protocol::Postgres => "postgres",
         Protocol::Mysql => "mysql",
         Protocol::Mssql => "mssql",
+        Protocol::ClickHouse => "clickhouse",
         Protocol::Sqlite => "sqlite",
         _ => "sql",
     };

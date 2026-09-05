@@ -32,3 +32,8 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "mysql", "sql
 rust_decimal = "1"
 tiberius = { version = "0.12", default-features = false, features = ["rustls", "chrono", "tds73", "rust_decimal"] }
 tokio-util = { version = "0.7", features = ["compat"] }
+# ClickHouse: SQL over HTTP. The official `clickhouse` crate is SELECT-only
+# (it appends ` FORMAT x` to the SQL text and forces readonly=1), so the
+# executor uses a raw reqwest transport instead — the first HTTP transport
+# in poste-exec. reqwest is also the base for any future HTTP dialect (Trino).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }

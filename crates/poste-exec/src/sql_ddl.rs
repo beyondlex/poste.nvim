@@ -500,12 +500,96 @@ impl DdlGenerator for MssqlDdl {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ClickHouse
+// ---------------------------------------------------------------------------
+
+pub struct ClickHouseDdl;
+
+impl DdlGenerator for ClickHouseDdl {
+    fn create_table(&self, schema: &TableSchema) -> String {
+        use crate::sql_dialect::ClickHouseDialect;
+        let d = ClickHouseDialect;
+        let q = |name: &str| d.quote_identifier(name);
+
+        let mut cols: Vec<String> = schema
+            .columns
+            .iter()
+            .map(|c| format!("  {}", column_def_sql(c, &q)))
+            .collect();
+
+        let order_by = schema
+            .primary_key
+            .as_ref()
+            .map(|pk| pk.iter().map(|c| q(c)).collect::<Vec<_>>().join(", "))
+            .unwrap_or_else(|| "tuple()".to_string());
+
+        format!(
+            "CREATE TABLE {} (\n{}\n) ENGINE = MergeTree ORDER BY ({})",
+            q(&schema.name),
+            cols.join(",\n"),
+            order_by
+        )
+    }
+
+    fn add_column(&self, table: &str, column: &ColumnDef) -> String {
+        use crate::sql_dialect::ClickHouseDialect;
+        let d = ClickHouseDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        format!("ALTER TABLE {} ADD COLUMN {};", q(table), column_def_sql(column, &q))
+    }
+
+    fn drop_column(&self, table: &str, column: &str) -> String {
+        use crate::sql_dialect::ClickHouseDialect;
+        let d = ClickHouseDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        format!("ALTER TABLE {} DROP COLUMN {};", q(table), q(column))
+    }
+
+    fn rename_column(&self, table: &str, old: &str, new: &str) -> String {
+        use crate::sql_dialect::ClickHouseDialect;
+        let d = ClickHouseDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        format!("ALTER TABLE {} RENAME COLUMN {} TO {};", q(table), q(old), q(new))
+    }
+
+    fn alter_column_type(&self, table: &str, column: &str, new_type: &str) -> String {
+        use crate::sql_dialect::ClickHouseDialect;
+        let d = ClickHouseDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        format!("ALTER TABLE {} MODIFY COLUMN {} {};", q(table), q(column), new_type)
+    }
+
+    fn add_index(&self, table: &str, columns: &[&str], unique: bool) -> String {
+        use crate::sql_dialect::ClickHouseDialect;
+        let d = ClickHouseDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        let _ = unique; // ClickHouse indices are never unique
+        let col_list: Vec<String> = columns.iter().map(|c| q(c)).collect();
+        let index_name = format!("idx_{}_{}", table, columns.join("_"));
+        format!(
+            "ALTER TABLE {} ADD INDEX {} ({}) TYPE minmax GRANULARITY 1;",
+            q(table),
+            q(&index_name),
+            col_list.join(", ")
+        )
+    }
+
+    fn drop_table(&self, table: &str, _cascade: bool) -> String {
+        use crate::sql_dialect::ClickHouseDialect;
+        let d = ClickHouseDialect;
+        let q = |name: &str| d.quote_identifier(name);
+        format!("DROP TABLE {};", q(table))
+    }
+}
+
 /// Get a DdlGenerator for the given dialect name.
 pub fn ddl_for(dialect: &str) -> Option<Box<dyn DdlGenerator>> {
     match dialect {
         "postgres" => Some(Box::new(PostgresDdl)),
         "mysql" => Some(Box::new(MysqlDdl)),
         "mssql" => Some(Box::new(MssqlDdl)),
+        "clickhouse" => Some(Box::new(ClickHouseDdl)),
         "sqlite" => Some(Box::new(SqliteDdl)),
         _ => None,
     }

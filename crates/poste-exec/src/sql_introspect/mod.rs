@@ -4,6 +4,7 @@
 //! tables, columns, and indexes. Uses the `Dialect` trait from `sql_dialect.rs`
 //! for SQL generation and handles per-dialect parameter binding differences.
 
+mod clickhouse;
 mod mssql;
 mod mysql;
 mod postgres;
@@ -74,6 +75,7 @@ pub async fn introspect(params: &IntrospectParams) -> Result<Value> {
         "postgres" => postgres::introspect_postgres(params).await,
         "mysql" => mysql::introspect_mysql(params).await,
         "mssql" => mssql::introspect_mssql(params).await,
+        "clickhouse" => clickhouse::introspect_clickhouse(params).await,
         "sqlite" => sqlite::introspect_sqlite(params).await,
         other => anyhow::bail!("Unknown dialect: {}", other),
     }

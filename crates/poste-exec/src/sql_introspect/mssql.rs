@@ -28,6 +28,10 @@ async fn rows(client: &mut MssqlClient, sql: &str) -> Result<Vec<Vec<Value>>> {
 }
 
 /// Lenient integer read: DMV aggregates can arrive as numeric (string in JSON).
+fn cell(row: &[Value], i: usize) -> &Value {
+    row.get(i).unwrap_or(&Value::Null)
+}
+
 fn as_int(v: &Value) -> i64 {
     v.as_i64()
         .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
@@ -43,7 +47,7 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
             rows(&mut client, dialect.list_databases())
                 .await?
                 .into_iter()
-                .map(|r| json!({ "name": r[0] }))
+                .map(|r| json!({ "name": cell(&r, 0) }))
                 .collect()
         }
         IntrospectType::Schemas => {
@@ -51,7 +55,7 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
             rows(&mut client, sql)
                 .await?
                 .into_iter()
-                .map(|r| json!({ "name": r[0] }))
+                .map(|r| json!({ "name": cell(&r, 0) }))
                 .collect()
         }
         IntrospectType::Tables => {
@@ -61,7 +65,7 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
             rows(&mut client, &sql)
                 .await?
                 .into_iter()
-                .map(|r| json!({ "name": r[0], "type": r[1], "comment": Value::Null }))
+                .map(|r| json!({ "name": cell(&r, 0), "type": cell(&r, 1), "comment": Value::Null }))
                 .collect()
         }
         IntrospectType::Columns => {
@@ -86,10 +90,10 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
                 .iter()
                 .map(|r| {
                     (
-                        r[0].as_str().unwrap_or_default().to_string(),
+                        cell(&r, 0).as_str().unwrap_or_default().to_string(),
                         (
-                            r[1].as_str().unwrap_or_default().to_string(),
-                            r[2].as_str().unwrap_or_default().to_string(),
+                            cell(&r, 1).as_str().unwrap_or_default().to_string(),
+                            cell(&r, 2).as_str().unwrap_or_default().to_string(),
                         ),
                     )
                 })
@@ -99,14 +103,14 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
                 .await?
                 .into_iter()
                 .map(|r| {
-                    let col_name = r[0].as_str().unwrap_or_default().to_string();
+                    let col_name = cell(&r, 0).as_str().unwrap_or_default().to_string();
                     let fk = fk_map.get(&col_name);
                     json!({
                         "name": col_name,
-                        "type": r[1],
-                        "nullable": r[2].as_str() == Some("YES"),
-                        "default": r[3],
-                        "max_length": as_int(&r[4]),
+                        "type": cell(&r, 1),
+                        "nullable": cell(&r, 2).as_str() == Some("YES"),
+                        "default": cell(&r, 3),
+                        "max_length": as_int(&cell(&r, 4)),
                         "comment": Value::Null,
                         "fk_table": fk.map(|f| f.0.as_str()),
                         "fk_column": fk.map(|f| f.1.as_str()),
@@ -128,10 +132,10 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
             let mut meta: std::collections::HashMap<String, (bool, bool)> =
                 std::collections::HashMap::new();
             for r in raw {
-                let name = r[0].as_str().unwrap_or_default().to_string();
-                let unique = r[1].as_bool().unwrap_or(false);
-                let is_pk = r[2].as_bool().unwrap_or(false);
-                let column = r[3].as_str().unwrap_or_default().to_string();
+                let name = cell(&r, 0).as_str().unwrap_or_default().to_string();
+                let unique = cell(&r, 1).as_bool().unwrap_or(false);
+                let is_pk = cell(&r, 2).as_bool().unwrap_or(false);
+                let column = cell(&r, 3).as_str().unwrap_or_default().to_string();
                 if !meta.contains_key(&name) {
                     order.push(name.clone());
                     meta.insert(name.clone(), (unique, is_pk));
@@ -192,10 +196,10 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
                 .into_iter()
                 .map(|r| {
                     json!({
-                        "name": r[0],
-                        "total_size": r[1],
-                        "table_count": as_int(&r[2]),
-                        "encoding": r[3],
+                        "name": cell(&r, 0),
+                        "total_size": cell(&r, 1),
+                        "table_count": as_int(&cell(&r, 2)),
+                        "encoding": cell(&r, 3),
                     })
                 })
                 .collect()
@@ -226,15 +230,15 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
                 .unwrap_or_default()
                 .into_iter()
                 .map(|r| {
-                    let data_kb = as_int(&r[3]);
-                    let index_kb = as_int(&r[4]);
+                    let data_kb = as_int(&cell(&r, 3));
+                    let index_kb = as_int(&cell(&r, 4));
                     json!({
-                        "table_name": r[0],
-                        "schema_name": r[1],
+                        "table_name": cell(&r, 0),
+                        "schema_name": cell(&r, 1),
                         "total_size": format!("{} KB", data_kb + index_kb),
                         "data_size": format!("{} KB", data_kb),
                         "index_size": format!("{} KB", index_kb),
-                        "row_count_estimate": as_int(&r[2]),
+                        "row_count_estimate": as_int(&cell(&r, 2)),
                         "comment": Value::Null,
                     })
                 })
@@ -265,10 +269,10 @@ async fn build_create_table(
     let columns: Vec<sql_ddl::ColumnDef> = col_rows
         .iter()
         .map(|r| sql_ddl::ColumnDef {
-            name: r[0].as_str().unwrap_or_default().to_string(),
-            col_type: r[1].as_str().unwrap_or_default().to_string(),
-            nullable: r[2].as_str() == Some("YES"),
-            default: r[3].as_str().map(|s| s.to_string()),
+            name: cell(&r, 0).as_str().unwrap_or_default().to_string(),
+            col_type: cell(&r, 1).as_str().unwrap_or_default().to_string(),
+            nullable: cell(&r, 2).as_str() == Some("YES"),
+            default: cell(&r, 3).as_str().map(|s| s.to_string()),
             comment: None,
             extra: None,
         })
@@ -288,7 +292,7 @@ async fn build_create_table(
     let mut pk_cols: Vec<String> = rows(client, &pk_sql)
         .await?
         .iter()
-        .map(|r| r[0].as_str().unwrap_or_default().to_string())
+        .map(|r| cell(&r, 0).as_str().unwrap_or_default().to_string())
         .collect();
     pk_cols.retain(|c| !c.is_empty());
 

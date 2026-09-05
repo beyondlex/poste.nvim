@@ -124,12 +124,13 @@ impl ConnectionConfig {
                     format!("sqlite:{}?mode=rwc", path)
                 }
             }
-            "postgres" | "mysql" | "mssql" => {
+            "postgres" | "mysql" | "mssql" | "clickhouse" => {
                 let scheme = self.dialect.as_str();
                 let host = self.host.as_deref().unwrap_or("localhost");
                 let default_port = match scheme {
                     "postgres" => 5432,
                     "mysql" => 3306,
+                    "clickhouse" => 8123,
                     _ => 1433,
                 };
                 let port = self.port.unwrap_or(default_port);
@@ -326,6 +327,11 @@ pub async fn test_connection(config: &ConnectionConfig) -> Result<String> {
             )
             .await
             .map_err(|_| anyhow::anyhow!("MSSQL probe timed out"))??;
+            Ok("OK".to_string())
+        }
+        "clickhouse" => {
+            let client = crate::sql_executor::clickhouse::connect_clickhouse(&url).await?;
+            let _ = crate::sql_executor::clickhouse::clickhouse_post(&client, "SELECT 1", 5).await?;
             Ok("OK".to_string())
         }
         other => anyhow::bail!("Unknown dialect: {}", other),

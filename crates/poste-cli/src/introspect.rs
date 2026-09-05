@@ -30,6 +30,8 @@ pub async fn execute(args: IntrospectArgs) -> Result<()> {
         "mysql".to_string()
     } else if connection_url.starts_with("mssql://") {
         "mssql".to_string()
+    } else if connection_url.starts_with("clickhouse://") {
+        "clickhouse".to_string()
     } else {
         "postgres".to_string()
     };

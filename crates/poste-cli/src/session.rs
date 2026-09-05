@@ -29,6 +29,8 @@ pub async fn execute(args: SessionArgs) -> Result<()> {
         poste_core::Protocol::Mysql
     } else if connection_url.starts_with("mssql://") {
         poste_core::Protocol::Mssql
+    } else if connection_url.starts_with("clickhouse://") {
+        poste_core::Protocol::ClickHouse
     } else if connection_url.starts_with("postgres://")
         || connection_url.starts_with("postgresql://")
     {
@@ -49,6 +51,9 @@ pub async fn execute(args: SessionArgs) -> Result<()> {
         }
         poste_core::Protocol::Mssql => {
             session_mssql(&connection_url, args.timeout, args.max_rows).await
+        }
+        poste_core::Protocol::ClickHouse => {
+            session_clickhouse(&connection_url, args.timeout, args.max_rows).await
         }
         _ => anyhow::bail!("Not a SQL protocol"),
     }
@@ -542,6 +547,89 @@ async fn session_mssql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
                     "sql": sql, "error": format!("{}", e), "execution_time_ms": 0,
                 }),
             }
+        };
+        stdout
+            .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
+            .await?;
+        stdout.flush().await?;
+    }
+
+    Ok(())
+}
+
+async fn session_clickhouse(connection_url: &str, timeout_secs: u64, max_rows: u64) -> Result<()> {
+    use poste_exec::sql_executor::clickhouse;
+
+    let mut client = clickhouse::connect_clickhouse(connection_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("ClickHouse connection failed: {}", e))?;
+    // A session_id keeps temp tables and SET state alive across requests.
+    client = clickhouse::with_session_id(client, uuid::Uuid::new_v4().to_string());
+
+    let mut stdout = tokio::io::stdout();
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+
+    while let Some(line) = lines.next_line().await? {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let req: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(e) => {
+                let err = json!({"type":"result","seq":0,"status":"error","error":format!("JSON parse error: {}", e)});
+                stdout
+                    .write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes())
+                    .await?;
+                stdout.flush().await?;
+                continue;
+            }
+        };
+        let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
+        let sql = req
+            .get("sql")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if sql.is_empty() {
+            continue;
+        }
+
+        let stmt_start = Instant::now();
+        let result = match clickhouse::clickhouse_post(&client, &sql, timeout_secs).await {
+            Ok(ch) => {
+                let elapsed = stmt_start.elapsed().as_millis() as u64;
+                match ch.columns {
+                    Some(columns) => {
+                        let row_count = ch.rows.len() as u64;
+                        let truncated = max_rows > 0 && row_count > max_rows;
+                        let display_rows = if max_rows > 0 {
+                            std::cmp::min(row_count, max_rows) as usize
+                        } else {
+                            ch.rows.len()
+                        };
+                        json!({
+                            "type": "result", "seq": seq, "status": "ok",
+                            "sql": sql, "row_count": row_count,
+                            "affected_rows": null,
+                            "execution_time_ms": elapsed, "columns": columns,
+                            "rows": ch.rows.into_iter().take(display_rows).collect::<Vec<_>>(),
+                            "rows_truncated": truncated,
+                        })
+                    }
+                    None => json!({
+                        "type": "result", "seq": seq, "status": "ok",
+                        "sql": sql, "row_count": 0,
+                        "affected_rows": ch.written_rows,
+                        "execution_time_ms": elapsed, "columns": [], "rows": [],
+                    }),
+                }
+            }
+            Err(e) => json!({
+                "type": "result", "seq": seq, "status": "error",
+                "sql": sql, "error": format!("{}", e), "execution_time_ms": 0,
+            }),
         };
         stdout
             .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())

@@ -7,6 +7,7 @@ pub enum Protocol {
     Mysql,
     Postgres,
     Mssql,
+    ClickHouse,
     Sqlite,
 }
 

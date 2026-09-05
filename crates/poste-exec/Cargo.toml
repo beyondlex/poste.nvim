@@ -25,5 +25,8 @@ percent-encoding = "2"
 tiberius.workspace = true
 tokio-util.workspace = true
 
+# ClickHouse (SQL over HTTP — first HTTP transport in poste-exec)
+reqwest.workspace = true
+
 # Redis
 redis = { version = "0.27", features = ["tokio-comp"] }
