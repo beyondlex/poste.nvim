@@ -9,7 +9,9 @@ use serde_json::{json, Value};
 use super::{IntrospectParams, IntrospectType};
 use crate::sql_ddl;
 use crate::sql_dialect::{ClickHouseDialect, Dialect};
-use crate::sql_executor::clickhouse::{clickhouse_post, connect_clickhouse, database, ClickHouseClient};
+use crate::sql_executor::clickhouse::{
+    clickhouse_post, connect_clickhouse, database, ClickHouseClient,
+};
 
 fn inline(sql: &str, args: &[&str]) -> String {
     let mut out = sql.to_string();
@@ -60,7 +62,9 @@ pub(super) async fn introspect_clickhouse(params: &IntrospectParams) -> Result<V
             rows(&client, &sql)
                 .await?
                 .into_iter()
-                .map(|r| json!({ "name": cell(&r, 0), "type": cell(&r, 1), "comment": Value::Null }))
+                .map(
+                    |r| json!({ "name": cell(&r, 0), "type": cell(&r, 1), "comment": Value::Null }),
+                )
                 .collect()
         }
         IntrospectType::Columns => {

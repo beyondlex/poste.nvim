@@ -106,11 +106,9 @@ pub async fn execute(args: RedisSessionArgs) -> Result<()> {
             },
         };
         if needs_rescue {
-            let rebuilt = tokio::time::timeout(
-                RECONNECT_TIMEOUT,
-                client.get_multiplexed_async_connection(),
-            )
-            .await;
+            let rebuilt =
+                tokio::time::timeout(RECONNECT_TIMEOUT, client.get_multiplexed_async_connection())
+                    .await;
             match rebuilt {
                 Ok(Ok(fresh)) => {
                     con = fresh;
@@ -141,7 +139,10 @@ pub async fn execute(args: RedisSessionArgs) -> Result<()> {
             },
         };
         if outcome.error.is_none()
-            && tokens.first().map(|t| t.to_uppercase() == "SELECT").unwrap_or(false)
+            && tokens
+                .first()
+                .map(|t| t.to_uppercase() == "SELECT")
+                .unwrap_or(false)
         {
             if let Some(db) = tokens.get(1).and_then(|t| t.parse::<i64>().ok()) {
                 current_db = Some(db);

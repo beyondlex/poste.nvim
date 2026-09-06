@@ -657,7 +657,10 @@ mod tests {
         assert_eq!(d.type_mapping("DateTime64(3)"), "datetime64");
         assert_eq!(d.type_mapping("Nullable(String)"), "nullable");
         assert_eq!(d.type_mapping("String"), "string");
-        assert_eq!(d.type_mapping("AggregateFunction(sum, UInt64)"), "AggregateFunction(sum, UInt64)");
+        assert_eq!(
+            d.type_mapping("AggregateFunction(sum, UInt64)"),
+            "AggregateFunction(sum, UInt64)"
+        );
     }
 
     #[test]

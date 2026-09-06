@@ -74,14 +74,17 @@ pub fn clickhouse_url_to_config(url: &str) -> Result<(String, String, String, St
         .decode_utf8_lossy()
         .to_string();
 
-    Ok((format!("http://{}:{}", host, port), user, password, database))
+    Ok((
+        format!("http://{}:{}", host, port),
+        user,
+        password,
+        database,
+    ))
 }
 
 pub async fn connect_clickhouse(url: &str) -> Result<ClickHouseClient> {
     let (base_url, user, password, database) = clickhouse_url_to_config(url)?;
-    let http = reqwest::Client::builder()
-        .user_agent("poste")
-        .build()?;
+    let http = reqwest::Client::builder().user_agent("poste").build()?;
     Ok(ClickHouseClient {
         http,
         base_url,
@@ -129,7 +132,10 @@ pub async fn clickhouse_post(
         req = req.timeout(std::time::Duration::from_secs(timeout_secs));
     }
 
-    let resp = req.send().await.map_err(|e| anyhow!("ClickHouse request failed: {}", e))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow!("ClickHouse request failed: {}", e))?;
     let status = resp.status();
     let summary_header = resp.headers().get("x-clickhouse-summary").cloned();
     let text = resp.text().await?;
@@ -143,7 +149,10 @@ pub async fn clickhouse_post(
     if let Some(header) = summary_header {
         if let Ok(v) = header.to_str() {
             if let Ok(summary) = serde_json::from_str::<Value>(v) {
-                written_rows = summary.get("written_rows").and_then(|r| r.as_u64()).unwrap_or(0);
+                written_rows = summary
+                    .get("written_rows")
+                    .and_then(|r| r.as_u64())
+                    .unwrap_or(0);
             }
         }
     }
@@ -151,7 +160,11 @@ pub async fn clickhouse_post(
     // DDL/DML → "OK" or empty body.
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed == "OK" {
-        return Ok(ChResponse { columns: None, rows: Vec::new(), written_rows });
+        return Ok(ChResponse {
+            columns: None,
+            rows: Vec::new(),
+            written_rows,
+        });
     }
 
     // Resultset → JSON format: {"meta":[{name,type}],"data":[{col:val}]}.
@@ -182,7 +195,11 @@ pub async fn clickhouse_post(
                         .collect()
                 })
                 .unwrap_or_default();
-            return Ok(ChResponse { columns: Some(columns), rows, written_rows });
+            return Ok(ChResponse {
+                columns: Some(columns),
+                rows,
+                written_rows,
+            });
         }
     }
 
@@ -196,7 +213,10 @@ pub async fn clickhouse_post(
             continue;
         }
         if let Ok(obj) = serde_json::from_str::<Value>(line) {
-            if let Some(names) = obj.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()) {
+            if let Some(names) = obj
+                .as_object()
+                .map(|o| o.keys().cloned().collect::<Vec<_>>())
+            {
                 if columns.is_none() {
                     columns = Some(
                         names
@@ -215,7 +235,11 @@ pub async fn clickhouse_post(
             }
         }
     }
-    Ok(ChResponse { columns, rows, written_rows })
+    Ok(ChResponse {
+        columns,
+        rows,
+        written_rows,
+    })
 }
 
 pub fn is_query_stmt(stmt: &str) -> bool {

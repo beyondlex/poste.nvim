@@ -43,10 +43,7 @@ fn run_mq_exec(operations: serde_json::Value) -> Vec<serde_json::Value> {
 }
 
 fn results(lines: &[serde_json::Value]) -> Vec<&serde_json::Value> {
-    lines
-        .iter()
-        .filter(|l| l["type"] == "result")
-        .collect()
+    lines.iter().filter(|l| l["type"] == "result").collect()
 }
 
 #[test]

@@ -119,7 +119,11 @@ pub async fn mssql_query(
         let rows = stream.into_first_result().await?;
         let json_rows: Vec<Vec<Value>> = rows
             .iter()
-            .map(|row| (0..row.len()).map(|i| mssql_value_to_json(row, i)).collect())
+            .map(|row| {
+                (0..row.len())
+                    .map(|i| mssql_value_to_json(row, i))
+                    .collect()
+            })
             .collect();
         Ok((columns, json_rows))
     };
@@ -136,11 +140,7 @@ pub async fn mssql_query(
 
 /// Run one non-query statement, returning the affected row count. DDL goes
 /// through the batch path (see `is_ddl_stmt`) so temp tables survive.
-pub async fn mssql_execute(
-    client: &mut MssqlClient,
-    sql: &str,
-    timeout_secs: u64,
-) -> Result<u64> {
+pub async fn mssql_execute(client: &mut MssqlClient, sql: &str, timeout_secs: u64) -> Result<u64> {
     if is_ddl_stmt(sql) {
         mssql_batch(client, sql, timeout_secs).await?;
         return Ok(0);
@@ -173,11 +173,7 @@ pub async fn mssql_execute(
 /// the (new/cleared) transaction descriptor back as an ENVCHANGE token.
 /// `mssql_query` drains the stream to the end, so the stored descriptor
 /// stays current.
-pub async fn mssql_batch(
-    client: &mut MssqlClient,
-    sql: &str,
-    timeout_secs: u64,
-) -> Result<()> {
+pub async fn mssql_batch(client: &mut MssqlClient, sql: &str, timeout_secs: u64) -> Result<()> {
     mssql_query(client, sql, timeout_secs).await?;
     Ok(())
 }
@@ -222,9 +218,15 @@ pub fn mssql_value_to_json(row: &tiberius::Row, idx: usize) -> Value {
     let ct = row.columns().get(idx).map(|c| c.column_type());
     match ct {
         Some(CT::Bit | CT::Bitn) => value::opt_json(row.try_get::<bool, _>(idx).ok().flatten()),
-        Some(CT::Int1) => value::opt_json(row.try_get::<u8, _>(idx).ok().flatten().map(|v| v as i64)),
-        Some(CT::Int2) => value::opt_json(row.try_get::<i16, _>(idx).ok().flatten().map(|v| v as i64)),
-        Some(CT::Int4) => value::opt_json(row.try_get::<i32, _>(idx).ok().flatten().map(|v| v as i64)),
+        Some(CT::Int1) => {
+            value::opt_json(row.try_get::<u8, _>(idx).ok().flatten().map(|v| v as i64))
+        }
+        Some(CT::Int2) => {
+            value::opt_json(row.try_get::<i16, _>(idx).ok().flatten().map(|v| v as i64))
+        }
+        Some(CT::Int4) => {
+            value::opt_json(row.try_get::<i32, _>(idx).ok().flatten().map(|v| v as i64))
+        }
         Some(CT::Int8 | CT::Intn) => value::opt_int_json(row.try_get::<i64, _>(idx).ok().flatten()),
         Some(CT::Float4) => value::opt_json(row.try_get::<f32, _>(idx).ok().flatten()),
         Some(CT::Float8 | CT::Floatn) => value::opt_json(row.try_get::<f64, _>(idx).ok().flatten()),
@@ -238,24 +240,41 @@ pub fn mssql_value_to_json(row: &tiberius::Row, idx: usize) -> Value {
         }
         Some(CT::Daten) => value::date_fallback(
             row.try_get::<chrono::NaiveDate, _>(idx).ok().flatten(),
-            row.try_get::<&str, _>(idx).ok().flatten().map(|s| s.to_string()),
-            row.try_get::<&[u8], _>(idx).ok().flatten().map(|b| b.to_vec()),
+            row.try_get::<&str, _>(idx)
+                .ok()
+                .flatten()
+                .map(|s| s.to_string()),
+            row.try_get::<&[u8], _>(idx)
+                .ok()
+                .flatten()
+                .map(|b| b.to_vec()),
         ),
         Some(CT::Timen) => value::time_fallback(
             row.try_get::<chrono::NaiveTime, _>(idx).ok().flatten(),
-            row.try_get::<&str, _>(idx).ok().flatten().map(|s| s.to_string()),
-            row.try_get::<&[u8], _>(idx).ok().flatten().map(|b| b.to_vec()),
+            row.try_get::<&str, _>(idx)
+                .ok()
+                .flatten()
+                .map(|s| s.to_string()),
+            row.try_get::<&[u8], _>(idx)
+                .ok()
+                .flatten()
+                .map(|b| b.to_vec()),
         ),
         Some(CT::Datetime | CT::Datetime4 | CT::Datetimen | CT::Datetime2) => {
             value::datetime_fallback(
                 row.try_get::<chrono::NaiveDateTime, _>(idx).ok().flatten(),
-                row.try_get::<&str, _>(idx).ok().flatten().map(|s| s.to_string()),
-                row.try_get::<&[u8], _>(idx).ok().flatten().map(|b| b.to_vec()),
+                row.try_get::<&str, _>(idx)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.to_string()),
+                row.try_get::<&[u8], _>(idx)
+                    .ok()
+                    .flatten()
+                    .map(|b| b.to_vec()),
             )
         }
         Some(CT::DatetimeOffsetn) => {
-            let v: Option<chrono::DateTime<chrono::FixedOffset>> =
-                row.try_get(idx).ok().flatten();
+            let v: Option<chrono::DateTime<chrono::FixedOffset>> = row.try_get(idx).ok().flatten();
             v.map(|dt| {
                 json!(dt
                     .with_timezone(&chrono::Local)
@@ -265,8 +284,14 @@ pub fn mssql_value_to_json(row: &tiberius::Row, idx: usize) -> Value {
             .unwrap_or(Value::Null)
         }
         _ => value::string_fallback(
-            row.try_get::<&str, _>(idx).ok().flatten().map(|s| s.to_string()),
-            row.try_get::<&[u8], _>(idx).ok().flatten().map(|b| b.to_vec()),
+            row.try_get::<&str, _>(idx)
+                .ok()
+                .flatten()
+                .map(|s| s.to_string()),
+            row.try_get::<&[u8], _>(idx)
+                .ok()
+                .flatten()
+                .map(|b| b.to_vec()),
         ),
     }
 }

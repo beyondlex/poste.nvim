@@ -525,7 +525,16 @@ pub(crate) fn is_known_keyword(word: &str) -> bool {
 pub(crate) fn is_table_keyword(w: &str) -> bool {
     matches!(
         w,
-        "analyze" | "call" | "copy" | "from" | "into" | "join" | "sequence" | "table" | "update" | "vacuum"
+        "analyze"
+            | "call"
+            | "copy"
+            | "from"
+            | "into"
+            | "join"
+            | "sequence"
+            | "table"
+            | "update"
+            | "vacuum"
     )
 }
 

@@ -331,7 +331,8 @@ pub async fn test_connection(config: &ConnectionConfig) -> Result<String> {
         }
         "clickhouse" => {
             let client = crate::sql_executor::clickhouse::connect_clickhouse(&url).await?;
-            let _ = crate::sql_executor::clickhouse::clickhouse_post(&client, "SELECT 1", 5).await?;
+            let _ =
+                crate::sql_executor::clickhouse::clickhouse_post(&client, "SELECT 1", 5).await?;
             Ok("OK".to_string())
         }
         other => anyhow::bail!("Unknown dialect: {}", other),

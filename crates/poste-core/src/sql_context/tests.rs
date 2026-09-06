@@ -1912,3 +1912,68 @@ fn test_tables_from_all_statements_without_semicolon() {
         "authors without alias from UPDATE should be present"
     );
 }
+
+// ---- find_all_statement_ranges: FOR UPDATE containment & phantom ranges ----
+
+#[test]
+fn test_all_ranges_for_update_in_first_statement() {
+    // regression: the old stmt_start > 0 guard split the FIRST statement's
+    // FOR UPDATE into phantom extra ranges
+    let ranges = find_all_statement_ranges(&["SELECT 1 FOR UPDATE;", "SELECT 2;"]);
+    assert_eq!(ranges, vec![(0, 0), (1, 1)]);
+}
+
+#[test]
+fn test_all_ranges_for_update_mid_buffer() {
+    let ranges = find_all_statement_ranges(&["SELECT 0;", "SELECT 1 FOR UPDATE;", "SELECT 2;"]);
+    assert_eq!(ranges, vec![(0, 0), (1, 1), (2, 2)]);
+}
+
+#[test]
+fn test_all_ranges_on_conflict_do_update() {
+    let lines = [
+        "INSERT INTO t (id) VALUES (1);",
+        "INSERT INTO t (id) VALUES (1) ON CONFLICT DO UPDATE SET id = 2;",
+        "SELECT 3;",
+    ];
+    let ranges = find_all_statement_ranges(&lines);
+    assert_eq!(ranges, vec![(0, 0), (1, 1), (2, 2)]);
+}
+
+#[test]
+fn test_all_ranges_same_line_two_statements() {
+    // two statements sharing line 0 both map to line 0
+    let lines = ["SELECT 1; SELECT 2;", "SELECT 3;"];
+    let ranges = find_all_statement_ranges(&lines);
+    assert_eq!(ranges, vec![(0, 0), (0, 0), (1, 1)]);
+}
+
+#[test]
+fn test_all_ranges_empty_statement_no_phantom() {
+    // ";;" must not yield empty/phantom statements
+    let lines = ["SELECT 1;;", "SELECT 2;"];
+    let ranges = find_all_statement_ranges(&lines);
+    assert_eq!(ranges, vec![(0, 0), (1, 1)]);
+}
+
+#[test]
+fn test_all_ranges_with_cte_consumes_following_select() {
+    let lines = ["WITH c AS (SELECT 1) SELECT * FROM c;", "SELECT 2;"];
+    let ranges = find_all_statement_ranges(&lines);
+    assert_eq!(ranges, vec![(0, 0), (1, 1)]);
+}
+
+#[test]
+fn test_all_ranges_trailing_comment_does_not_extend() {
+    let lines = ["SELECT 1; -- trailing", "SELECT 2;"];
+    let ranges = find_all_statement_ranges(&lines);
+    assert_eq!(ranges, vec![(0, 0), (1, 1)]);
+}
+
+#[test]
+fn test_all_ranges_standalone_update_is_a_statement() {
+    // a real UPDATE statement must not be swallowed as a FOR UPDATE clause
+    let lines = ["SELECT 1;", "UPDATE t SET x = 1;", "SELECT 2;"];
+    let ranges = find_all_statement_ranges(&lines);
+    assert_eq!(ranges, vec![(0, 0), (1, 1), (2, 2)]);
+}

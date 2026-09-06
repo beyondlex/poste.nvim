@@ -43,13 +43,11 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
     let dialect = MssqlDialect;
 
     let items: Vec<Value> = match params.introspect_type {
-        IntrospectType::Databases => {
-            rows(&mut client, dialect.list_databases())
-                .await?
-                .into_iter()
-                .map(|r| json!({ "name": cell(&r, 0) }))
-                .collect()
-        }
+        IntrospectType::Databases => rows(&mut client, dialect.list_databases())
+            .await?
+            .into_iter()
+            .map(|r| json!({ "name": cell(&r, 0) }))
+            .collect(),
         IntrospectType::Schemas => {
             let sql = dialect.list_schemas().unwrap();
             rows(&mut client, sql)
@@ -65,7 +63,9 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
             rows(&mut client, &sql)
                 .await?
                 .into_iter()
-                .map(|r| json!({ "name": cell(&r, 0), "type": cell(&r, 1), "comment": Value::Null }))
+                .map(
+                    |r| json!({ "name": cell(&r, 0), "type": cell(&r, 1), "comment": Value::Null }),
+                )
                 .collect()
         }
         IntrospectType::Columns => {
@@ -152,10 +152,7 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
                         .map(|c| c.as_str().unwrap_or_default().to_string())
                         .collect::<Vec<_>>();
                     let definition = if is_pk {
-                        format!(
-                            "PRIMARY KEY constraint ({})",
-                            cols.join(", ")
-                        )
+                        format!("PRIMARY KEY constraint ({})", cols.join(", "))
                     } else {
                         format!(
                             "CREATE {} INDEX {} ON {} ({})",

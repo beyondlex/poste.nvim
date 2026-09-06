@@ -50,10 +50,7 @@ fn redis_session_keeps_connection_state_across_requests() {
         let ev: serde_json::Value = serde_json::from_str(line.trim()).expect("response is JSON");
         assert_eq!(ev["type"], "result");
         assert_eq!(ev["seq"], req["seq"]);
-        assert!(
-            ev.get("error").is_none(),
-            "request {req} failed: {ev}"
-        );
+        assert!(ev.get("error").is_none(), "request {req} failed: {ev}");
     }
 
     // SELECT persisted: GET hits db 1, DBSIZE sees both keys there
@@ -65,7 +62,10 @@ fn redis_session_keeps_connection_state_across_requests() {
     reader.read_line(&mut line).unwrap();
     let ev: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
     assert_eq!(ev["seq"], 6);
-    assert_eq!(ev["value"]["value"], "one", "SELECT state lost across requests");
+    assert_eq!(
+        ev["value"]["value"], "one",
+        "SELECT state lost across requests"
+    );
 
     // cleanup: back to db 0 and delete both keys
     line.clear();
@@ -104,7 +104,10 @@ fn redis_session_rejects_non_redis_urls() {
     let out = child.wait_with_output().unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("Not a redis connection URL"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("Not a redis connection URL"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -137,7 +140,9 @@ fn redis_session_errors_on_bad_json_but_keeps_running() {
     assert_eq!(ev["status"], "error");
     assert!(ev["error"].as_str().unwrap().contains("JSON parse error"));
 
-    stdin.write_all(b"{\"seq\":1,\"command\":[\"PING\"]}\n").unwrap();
+    stdin
+        .write_all(b"{\"seq\":1,\"command\":[\"PING\"]}\n")
+        .unwrap();
     stdin.flush().unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();

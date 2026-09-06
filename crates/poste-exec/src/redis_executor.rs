@@ -240,8 +240,11 @@ pub fn redis_value_to_json(
             // and recurse on the items so the Lua side can page through
             // HSCAN/SSCAN/ZSCAN (P1-3 large-collection navigation).
             let upper_cmd = cmd_name.to_uppercase();
-            if upper_cmd == "SCAN" || upper_cmd == "HSCAN" || upper_cmd == "SSCAN"
-                || upper_cmd == "ZSCAN" {
+            if upper_cmd == "SCAN"
+                || upper_cmd == "HSCAN"
+                || upper_cmd == "SSCAN"
+                || upper_cmd == "ZSCAN"
+            {
                 let cursor = key_string(&arr[0]).unwrap_or_else(|| "0".into());
                 let items = match arr.get(1) {
                     Some(redis::Value::Array(inner)) => inner.clone(),
@@ -253,10 +256,15 @@ pub fn redis_value_to_json(
                     // ZSCAN's items are member/score pairs → zset shape;
                     // SSCAN's items are bare members → set shape;
                     // SCAN items are bare keys → list shape.
-                    if upper_cmd == "HSCAN" { "HGETALL" }
-                    else if upper_cmd == "ZSCAN" { "ZRANGE" }
-                    else if upper_cmd == "SSCAN" { "SMEMBERS" }
-                    else { "KEYS" },
+                    if upper_cmd == "HSCAN" {
+                        "HGETALL"
+                    } else if upper_cmd == "ZSCAN" {
+                        "ZRANGE"
+                    } else if upper_cmd == "SSCAN" {
+                        "SMEMBERS"
+                    } else {
+                        "KEYS"
+                    },
                     max_items,
                     max_bytes,
                 );
@@ -270,7 +278,8 @@ pub fn redis_value_to_json(
                 "HGETALL" => "hash",
                 "LRANGE" | "LINDEX" | "LPOP" | "RPOP" => "list",
                 "SMEMBERS" | "SINTER" | "SUNION" | "SDIFF" | "SRANDMEMBER" => "set",
-                "ZRANGE" | "ZREVRANGE" | "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZPOPMIN" | "ZPOPMAX" => "zset",
+                "ZRANGE" | "ZREVRANGE" | "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZPOPMIN"
+                | "ZPOPMAX" => "zset",
                 "XRANGE" | "XREVRANGE" | "XREAD" | "XREADGROUP" => "stream",
                 // KEYS always returns keys — never let the even-count
                 // heuristic misread them as field-value pairs
@@ -279,9 +288,12 @@ pub fn redis_value_to_json(
                     // Heuristic: flat string arrays of even length look like
                     // field-value pairs
                     if len % 2 == 0
-                        && arr
-                            .iter()
-                            .all(|v| matches!(v, redis::Value::BulkString(_) | redis::Value::SimpleString(_)))
+                        && arr.iter().all(|v| {
+                            matches!(
+                                v,
+                                redis::Value::BulkString(_) | redis::Value::SimpleString(_)
+                            )
+                        })
                     {
                         "hash"
                     } else {
@@ -296,7 +308,8 @@ pub fn redis_value_to_json(
                     for chunk in arr[..shown_len].chunks(2) {
                         if chunk.len() == 2 {
                             if let Some(key) = key_string(&chunk[0]) {
-                                let value = redis_value_to_json(&chunk[1], "", max_items, max_bytes);
+                                let value =
+                                    redis_value_to_json(&chunk[1], "", max_items, max_bytes);
                                 entries.push(json!([key, value["value"].clone()]));
                             }
                         }
@@ -402,7 +415,12 @@ mod tests {
             redis_value_to_json(&redis::Value::Okay, "SET", 100, 1024),
             json!({"type": "string", "value": "OK"})
         );
-        let out = redis_value_to_json(&redis::Value::SimpleString("PONG".into()), "PING", 100, 1024);
+        let out = redis_value_to_json(
+            &redis::Value::SimpleString("PONG".into()),
+            "PING",
+            100,
+            1024,
+        );
         assert_eq!(out["value"], json!("PONG"));
     }
 
@@ -469,10 +487,7 @@ mod tests {
         let out = redis_value_to_json(&redis::Value::Array(arr), "HGETALL", 100, 1024);
         assert_eq!(out["type"], "hash");
         assert_eq!(out["len"], 2);
-        assert_eq!(
-            out["entries"],
-            json!([["name", "Alice"], ["age", "30"]])
-        );
+        assert_eq!(out["entries"], json!([["name", "Alice"], ["age", "30"]]));
     }
 
     #[test]
@@ -533,12 +548,10 @@ mod tests {
 
     #[test]
     fn native_map_becomes_hash_entries() {
-        let m = vec![
-            (
-                redis::Value::BulkString(b"k".to_vec()),
-                redis::Value::BulkString(b"v".to_vec()),
-            ),
-        ];
+        let m = vec![(
+            redis::Value::BulkString(b"k".to_vec()),
+            redis::Value::BulkString(b"v".to_vec()),
+        )];
         let out = redis_value_to_json(&redis::Value::Map(m.clone()), "XREAD", 100, 1024);
         assert_eq!(out["type"], "hash");
         assert_eq!(out["entries"], json!([["k", "v"]]));
@@ -636,9 +649,22 @@ mod tests {
             &url,
             &[
                 vec!["PING".into()],
-                vec!["SET".into(), "poste:test".into(), "1".into(), "EX".into(), "60".into()],
+                vec![
+                    "SET".into(),
+                    "poste:test".into(),
+                    "1".into(),
+                    "EX".into(),
+                    "60".into(),
+                ],
                 vec!["GET".into(), "poste:test".into()],
-                vec!["HSET".into(), "poste:h".into(), "a".into(), "1".into(), "b".into(), "2".into()],
+                vec![
+                    "HSET".into(),
+                    "poste:h".into(),
+                    "a".into(),
+                    "1".into(),
+                    "b".into(),
+                    "2".into(),
+                ],
                 vec!["HGETALL".into(), "poste:h".into()],
                 vec!["NOSUCHCMD".into(), "x".into()],
             ],

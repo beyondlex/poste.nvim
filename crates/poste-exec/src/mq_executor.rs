@@ -18,8 +18,8 @@ use lapin::options::{
     ExchangeBindOptions, ExchangeDeclareOptions, ExchangeDeleteOptions, ExchangeUnbindOptions,
     QueueBindOptions, QueueDeclareOptions, QueueDeleteOptions, QueuePurgeOptions,
 };
-use lapin::ExchangeKind;
 use lapin::types::{AMQPValue, FieldTable, ShortString};
+use lapin::ExchangeKind;
 use lapin::{
     message::Delivery, uri::AMQPUri, BasicProperties, Channel, Connection, ConnectionProperties,
 };
@@ -227,7 +227,10 @@ async fn op_publish(channel: &Channel, op: &Value) -> Result<Value> {
         .to_vec();
     let props = json_to_properties(op.get("properties").unwrap_or(&Value::Null));
     let mut options = BasicPublishOptions::default();
-    options.mandatory = op.get("mandatory").and_then(|m| m.as_bool()).unwrap_or(true);
+    options.mandatory = op
+        .get("mandatory")
+        .and_then(|m| m.as_bool())
+        .unwrap_or(true);
 
     // Publisher confirms: unroutable messages (mandatory + nothing bound)
     // come back via basic.return and MUST mark the operation failed
@@ -318,7 +321,10 @@ async fn op_consume(channel: &Channel, op: &Value) -> Result<Value> {
             // (non-destructive default, requirements §3.5).
             get.delivery
                 .acker
-                .nack(BasicNackOptions { requeue: true, ..Default::default() })
+                .nack(BasicNackOptions {
+                    requeue: true,
+                    ..Default::default()
+                })
                 .await?;
         }
     }
@@ -364,7 +370,11 @@ async fn op_declare(channel: &Channel, op: &Value) -> Result<Value> {
                 .exchange_declare(
                     name.as_str(),
                     exchange_type,
-                    ExchangeDeclareOptions { durable, auto_delete, ..Default::default() },
+                    ExchangeDeclareOptions {
+                        durable,
+                        auto_delete,
+                        ..Default::default()
+                    },
                     args,
                 )
                 .await?;
@@ -374,7 +384,11 @@ async fn op_declare(channel: &Channel, op: &Value) -> Result<Value> {
             let ok = channel
                 .queue_declare(
                     name.as_str(),
-                    QueueDeclareOptions { durable, auto_delete, ..Default::default() },
+                    QueueDeclareOptions {
+                        durable,
+                        auto_delete,
+                        ..Default::default()
+                    },
                     args,
                 )
                 .await?;
@@ -404,8 +418,7 @@ async fn op_bind(channel: &Channel, op: &Value, unbind: bool) -> Result<Value> {
         .and_then(|r| r.as_str())
         .unwrap_or_default()
         .to_string();
-    let is_exchange_dest =
-        op.get("destination_kind").and_then(|k| k.as_str()) == Some("exchange");
+    let is_exchange_dest = op.get("destination_kind").and_then(|k| k.as_str()) == Some("exchange");
     if unbind {
         if is_exchange_dest {
             channel
@@ -484,11 +497,7 @@ async fn op_delete(channel: &Channel, op: &Value) -> Result<Value> {
     }
 }
 
-pub async fn execute_operation_on(
-    channel: &Channel,
-    op: &Value,
-    seq: usize,
-) -> MqOutcome {
+pub async fn execute_operation_on(channel: &Channel, op: &Value, seq: usize) -> MqOutcome {
     let started = std::time::Instant::now();
     let operation = op
         .get("op")
@@ -573,10 +582,7 @@ mod tests {
             &Some(ShortString::from("application/json"))
         );
         assert_eq!(amqp_props.delivery_mode(), &Some(2));
-        assert_eq!(
-            amqp_props.correlation_id(),
-            &Some(ShortString::from("c1"))
-        );
+        assert_eq!(amqp_props.correlation_id(), &Some(ShortString::from("c1")));
         let header_table = amqp_props.headers().as_ref().unwrap();
         let back = field_table_to_json(header_table);
         assert_eq!(back["X-Trace"], json!("t1"));

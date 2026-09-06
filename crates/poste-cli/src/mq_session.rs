@@ -28,11 +28,14 @@ pub struct MqSessionArgs {
 }
 
 pub async fn execute(args: MqSessionArgs) -> Result<()> {
-    use poste_exec::mq_executor::{delivery_to_message, execute_operation_on, validate_connection_url};
+    use poste_exec::mq_executor::{
+        delivery_to_message, execute_operation_on, validate_connection_url,
+    };
 
     validate_connection_url(&args.connection)?;
     let connection =
-        lapin::Connection::connect(&args.connection, lapin::ConnectionProperties::default()).await?;
+        lapin::Connection::connect(&args.connection, lapin::ConnectionProperties::default())
+            .await?;
     let channel = connection.create_channel().await?;
 
     // Single writer: request handlers and consumer forwarders push lines.
@@ -42,7 +45,11 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
         let mut stdout = tokio::io::stdout();
         while let Some(ev) = rx.recv().await {
             let line = serde_json::to_string(&ev).unwrap_or_else(|_| "{}".into());
-            if stdout.write_all(format!("{}\n", line).as_bytes()).await.is_err() {
+            if stdout
+                .write_all(format!("{}\n", line).as_bytes())
+                .await
+                .is_err()
+            {
                 break;
             }
             let _ = stdout.flush().await;
@@ -63,8 +70,7 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
         let req: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                let _ = main_tx
-                    .send(json!({"type":"result","seq":0,"status":"error",
+                let _ = main_tx.send(json!({"type":"result","seq":0,"status":"error",
                         "error":format!("JSON parse error: {}", e)}));
                 continue;
             }
@@ -72,7 +78,11 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
         let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
 
         // Consumer control?
-        if let Some(consumer_name) = req.get("consumer").and_then(|c| c.as_str()).map(String::from) {
+        if let Some(consumer_name) = req
+            .get("consumer")
+            .and_then(|c| c.as_str())
+            .map(String::from)
+        {
             let action = req.get("action").and_then(|a| a.as_str()).unwrap_or("");
             match action {
                 "start" => {
@@ -115,8 +125,7 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
                                                     })
                                                     .await;
                                             }
-                                            let message =
-                                                delivery_to_message(&delivery, 0);
+                                            let message = delivery_to_message(&delivery, 0);
                                             if tx
                                                 .send(json!({
                                                     "type": "message",
@@ -129,20 +138,18 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
                                             }
                                         }
                                         Err(e) => {
-                                            let _ = tx
-                                                .send(json!({
-                                                    "type": "error",
-                                                    "consumer": name,
-                                                    "error": e.to_string(),
-                                                }));
+                                            let _ = tx.send(json!({
+                                                "type": "error",
+                                                "consumer": name,
+                                                "error": e.to_string(),
+                                            }));
                                             break;
                                         }
                                     }
                                 }
                             });
                             consumers.insert(consumer_name.clone(), handle);
-                            let _ = main_tx
-                                .send(json!({"type":"result","seq":seq,"status":"ok",
+                            let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"ok",
                                     "value":{"consumer":consumer_name,"queue":queue}}));
                         }
                         Err(e) => {
@@ -156,13 +163,11 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
                     if let Some(handle) = consumers.remove(&consumer_name) {
                         handle.abort();
                     }
-                    let _ = main_tx
-                        .send(json!({"type":"result","seq":seq,"status":"ok",
+                    let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"ok",
                             "value":{"consumer":consumer_name,"stopped":true}}));
                 }
                 other => {
-                    let _ = main_tx
-                        .send(json!({"type":"result","seq":seq,"status":"error",
+                    let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"error",
                             "error":format!("unknown consumer action: {}", other)}));
                 }
             }
@@ -195,8 +200,7 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
                 // Channel/connection wedged — end the session so the Lua
                 // manager can restart it cleanly (session_conn pattern).
                 session_ok = false;
-                let _ = main_tx
-                    .send(json!({"type":"result","seq":seq,"status":"error",
+                let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"error",
                         "error":"session operation timed out (30s); session closing"}));
                 break;
             }

@@ -36,7 +36,11 @@ fn redis_exec_emits_event_stream() {
         .unwrap();
 
     let out = child.wait_with_output().unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let lines: Vec<serde_json::Value> = String::from_utf8_lossy(&out.stdout)
         .lines()
@@ -101,7 +105,10 @@ fn redis_exec_rejects_non_redis_urls() {
     let out = child.wait_with_output().unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("Not a redis connection URL"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("Not a redis connection URL"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]

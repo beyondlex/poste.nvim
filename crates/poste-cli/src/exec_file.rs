@@ -625,7 +625,8 @@ where
                     0,
                 ))
             } else {
-                let affected = mssql::mssql_execute(&mut client, stmt_trimmed, timeout_secs).await?;
+                let affected =
+                    mssql::mssql_execute(&mut client, stmt_trimmed, timeout_secs).await?;
                 *total_affected += affected;
                 let elapsed = stmt_start.elapsed().as_millis() as u64;
                 Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true, affected))
@@ -656,7 +657,9 @@ where
             Err(e) => {
                 *failed += 1;
                 if in_transaction {
-                    mssql::mssql_batch(&mut client, "ROLLBACK", timeout_secs).await.ok();
+                    mssql::mssql_batch(&mut client, "ROLLBACK", timeout_secs)
+                        .await
+                        .ok();
                     in_transaction = false;
                 }
                 let result_obj = json!({
@@ -677,7 +680,9 @@ where
     }
 
     if in_transaction {
-        mssql::mssql_batch(&mut client, "COMMIT", timeout_secs).await.ok();
+        mssql::mssql_batch(&mut client, "COMMIT", timeout_secs)
+            .await
+            .ok();
     }
 
     Ok(())
@@ -756,7 +761,15 @@ where
                 }
                 None => {
                     *total_affected += ch.written_rows;
-                    Ok((Vec::new(), Vec::new(), 0u64, elapsed, false, true, ch.written_rows))
+                    Ok((
+                        Vec::new(),
+                        Vec::new(),
+                        0u64,
+                        elapsed,
+                        false,
+                        true,
+                        ch.written_rows,
+                    ))
                 }
             }
         }

@@ -214,17 +214,7 @@ pub fn find_statement_span(lines: &[&str], cursor_line: usize) -> Option<(usize,
     }
 
     // Build line-offset lookup
-    let line_offsets: Vec<usize> = {
-        let mut offsets = Vec::with_capacity(lines.len() + 1);
-        let mut offset = 0;
-        offsets.push(offset);
-        for l in lines {
-            offset += l.len() + 1;
-            offsets.push(offset);
-        }
-        offsets.pop();
-        offsets
-    };
+    let line_offsets = line_offsets_helper(lines);
 
     let cursor_byte = line_offsets[cursor_line];
     let cursor_tok = tokens
@@ -269,6 +259,24 @@ pub fn find_statement_span(lines: &[&str], cursor_line: usize) -> Option<(usize,
     Some((start_line, end_line))
 }
 
+/// Push a pending token range, skipping leading whitespace/comments so
+/// boundary-adjacent gaps (e.g. between `;` and the next keyword) never
+/// become phantom statements.
+fn push_stmt_range(result: &mut Vec<(usize, usize)>, tokens: &[Token], s: usize, e: usize) {
+    let mut s = s;
+    while s < e
+        && matches!(
+            tokens[s].kind,
+            TokenKind::Whitespace | TokenKind::LineComment | TokenKind::BlockComment
+        )
+    {
+        s += 1;
+    }
+    if s < e {
+        result.push((s, e));
+    }
+}
+
 /// Find ALL statement line ranges in the given lines.
 pub fn find_all_statement_ranges(lines: &[&str]) -> Vec<(usize, usize)> {
     if lines.is_empty() {
@@ -284,76 +292,76 @@ pub fn find_all_statement_ranges(lines: &[&str]) -> Vec<(usize, usize)> {
         return vec![(0, lines.len() - 1)];
     }
 
-    let line_offsets: Vec<usize> = {
-        let mut offsets = Vec::with_capacity(lines.len() + 1);
-        let mut offset = 0;
-        offsets.push(offset);
-        for l in lines {
-            offset += l.len() + 1;
-            offsets.push(offset);
-        }
-        offsets.pop();
-        offsets
-    };
-
     let depths = compute_paren_depths(&tokens);
 
     let mut result: Vec<(usize, usize)> = Vec::new();
     let mut stmt_start = 0usize;
-    let mut in_with = false;
+    let mut claim_next = false;
 
     for (i, t) in tokens.iter().enumerate() {
         if depths[i] != 0 {
             continue;
         }
         if t.kind == TokenKind::Semi {
-            result.push((stmt_start, i));
+            push_stmt_range(&mut result, &tokens, stmt_start, i);
             stmt_start = i + 1;
-            in_with = false;
+            claim_next = false;
             continue;
         }
         if t.kind == TokenKind::Keyword {
             let kw = t.text(&text).to_ascii_lowercase();
             if is_statement_start_keyword(&kw) {
+                // `UPDATE` is a clause of the statement that opened this range
+                // (SELECT ... FOR UPDATE, INSERT ... ON CONFLICT DO UPDATE):
+                // contained when a statement-start keyword in [stmt_start, i)
+                // claims it. The old `stmt_start > 0` guard made the FIRST
+                // statement's FOR UPDATE split into phantom statements.
                 let contained = kw == "update"
-                    && stmt_start > 0
                     && tokens[stmt_start..i].iter().any(|tt| {
                         let ttxt = tt.text(&text).to_ascii_lowercase();
                         is_statement_start_keyword(&ttxt) && kw_contains(&ttxt, &kw)
                     });
-                if in_with || contained {
-                    in_with = false;
+                if claim_next || contained {
+                    claim_next = false;
                     continue;
                 }
-                if i > stmt_start {
-                    result.push((stmt_start, i));
-                }
+                push_stmt_range(&mut result, &tokens, stmt_start, i);
                 stmt_start = i;
-                in_with = kw == "with";
+                claim_next = kw == "with";
             }
         }
     }
 
-    if stmt_start < tokens.len() {
-        result.push((stmt_start, tokens.len()));
-    }
+    push_stmt_range(&mut result, &tokens, stmt_start, tokens.len());
 
     // Convert token ranges → line ranges
     let out: Vec<(usize, usize)> = result
         .iter()
         .map(|&(s, e)| {
-            let start_line = byte_to_line(&line_offsets, tokens[s].start);
+            let start_line = byte_to_line(&line_offsets_helper(&lines), tokens[s].start);
             if e == 0 || e > tokens.len() {
                 (start_line, lines.len() - 1)
             } else {
                 let last = e.saturating_sub(1);
-                let end_line = byte_to_line(&line_offsets, tokens[last].end);
+                let end_line = byte_to_line(&line_offsets_helper(&lines), tokens[last].end);
                 (start_line, end_line)
             }
         })
         .collect();
 
     out
+}
+
+fn line_offsets_helper(lines: &[&str]) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(lines.len() + 1);
+    let mut offset = 0;
+    offsets.push(offset);
+    for l in lines {
+        offset += l.len() + 1;
+        offsets.push(offset);
+    }
+    offsets.pop();
+    offsets
 }
 
 fn byte_to_line(offsets: &[usize], byte: usize) -> usize {

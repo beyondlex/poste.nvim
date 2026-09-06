@@ -536,7 +536,11 @@ impl DdlGenerator for ClickHouseDdl {
         use crate::sql_dialect::ClickHouseDialect;
         let d = ClickHouseDialect;
         let q = |name: &str| d.quote_identifier(name);
-        format!("ALTER TABLE {} ADD COLUMN {};", q(table), column_def_sql(column, &q))
+        format!(
+            "ALTER TABLE {} ADD COLUMN {};",
+            q(table),
+            column_def_sql(column, &q)
+        )
     }
 
     fn drop_column(&self, table: &str, column: &str) -> String {
@@ -550,14 +554,24 @@ impl DdlGenerator for ClickHouseDdl {
         use crate::sql_dialect::ClickHouseDialect;
         let d = ClickHouseDialect;
         let q = |name: &str| d.quote_identifier(name);
-        format!("ALTER TABLE {} RENAME COLUMN {} TO {};", q(table), q(old), q(new))
+        format!(
+            "ALTER TABLE {} RENAME COLUMN {} TO {};",
+            q(table),
+            q(old),
+            q(new)
+        )
     }
 
     fn alter_column_type(&self, table: &str, column: &str, new_type: &str) -> String {
         use crate::sql_dialect::ClickHouseDialect;
         let d = ClickHouseDialect;
         let q = |name: &str| d.quote_identifier(name);
-        format!("ALTER TABLE {} MODIFY COLUMN {} {};", q(table), q(column), new_type)
+        format!(
+            "ALTER TABLE {} MODIFY COLUMN {} {};",
+            q(table),
+            q(column),
+            new_type
+        )
     }
 
     fn add_index(&self, table: &str, columns: &[&str], unique: bool) -> String {
