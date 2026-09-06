@@ -50,7 +50,7 @@ local function unplace_sign(buf, line_0)
 end
 
 local function any_active_spinners()
-  for buf, lines in pairs(spinner_signs) do
+  for _, lines in pairs(spinner_signs) do
     if next(lines) then return true end
   end
   return false

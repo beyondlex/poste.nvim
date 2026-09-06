@@ -79,12 +79,26 @@ local function verify_checksum(archive_path, platform, version)
 
   if not expected then return true end
 
-  local actual = vim.fn.system({ "sha256sum", archive_path }):match("^(%S+)")
-  if not actual then
-    -- macOS has shasum
+  -- hasher availability varies by platform (no sha256sum/shasum on Windows):
+  -- without any hasher, skip verification like a missing checksum file
+  -- rather than comparing garbage and rejecting a good download
+  local actual
+  if vim.fn.executable("sha256sum") == 1 then
+    actual = vim.fn.system({ "sha256sum", archive_path }):match("^(%S+)")
+  elseif vim.fn.executable("shasum") == 1 then
     actual = vim.fn.system({ "shasum", "-a", "256", archive_path }):match("^(%S+)")
+  elseif vim.fn.executable("certutil") == 1 then
+    -- certutil prints the 64-hex-char digest on its own line between banners
+    local out = vim.fn.system({ "certutil", "-hashfile", archive_path, "SHA256" })
+    for run in tostring(out):gmatch("%x+") do
+      if #run == 64 then actual = run break end
+    end
   end
 
+  if not actual then
+    vim.notify("[Poste] No SHA256 tool found — skipped checksum verification", vim.log.levels.WARN)
+    return true
+  end
   return actual == expected
 end
 
@@ -164,10 +178,19 @@ end
 
 --- Ensure the binary is available.
 --- Called at plugin startup. Returns the binary path if found, nil otherwise.
---- Checks (in order): user config, local dev build, default data path, then attempted download.
+--- Checks (in order): vim.g.poste_binary, user config, local dev build,
+--- default data path, then attempted download.
 --- When the installed binary exists, checks asynchronously whether the plugin's
 --- git tag matches the binary version and auto-updates if needed.
 function M.ensure()
+  -- 0. Global override (same first-class source as state.find_poste_binary):
+  --    a user pointing vim.g.poste_binary at a worktree/dev build must not
+  --    trigger a release download at startup.
+  local g = vim.g.poste_binary
+  if g and g ~= "" and vim.fn.filereadable(g) == 1 then
+    return vim.fn.fnamemodify(g, ":p")
+  end
+
   -- 1. User-configured path (state.config.poste_binary)
   local state_ok, state = pcall(require, "poste.state")
   if state_ok and state.config.poste_binary ~= "" then

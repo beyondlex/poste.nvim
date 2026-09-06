@@ -48,6 +48,16 @@ function M.word_wrap(text, max_width)
   return word_wrap(text, max_width)
 end
 
+--- Keep the last `count` characters of `s` (char-safe tail for truncation).
+---@param s string
+---@param nchars number vim.fn.strchars(s)
+---@param count number
+---@return string
+local function str_keep_tail(s, nchars, count)
+  if count <= 0 then return "" end
+  return vim.fn.strcharpart(s, math.max(0, nchars - count), count)
+end
+
 --- Pad text to a given display width (handles CJK via strdisplaywidth).
 ---@param text string
 ---@param width number Target display width
@@ -91,13 +101,16 @@ function M.dynamic_line(opts)
   if dw > content_width then
     local el_dw = vim.fn.strdisplaywidth(ellipsis)
     local avail = content_width - el_dw
+    -- strcharpart offsets are CHAR indices, not byte indices — deriving them
+    -- from #s split multi-byte characters in half
+    local nchars = vim.fn.strchars(s)
     if truncate_at == "left" then
-      local start_byte = vim.fn.strcharpart(s, #s - avail, avail)
-      return string.rep(" ", pad_left) .. ellipsis .. start_byte .. string.rep(" ", pad_right)
+      local keep = str_keep_tail(s, nchars, avail)
+      return string.rep(" ", pad_left) .. ellipsis .. keep .. string.rep(" ", pad_right)
     elseif truncate_at == "mid" then
       local half = math.floor(avail / 2)
       local left_part = vim.fn.strcharpart(s, 0, half)
-      local right_part = vim.fn.strcharpart(s, #s - (avail - half), avail - half)
+      local right_part = str_keep_tail(s, nchars, avail - half)
       return string.rep(" ", pad_left) .. left_part .. ellipsis .. right_part .. string.rep(" ", pad_right)
     else
       local truncated = vim.fn.strcharpart(s, 0, avail)
