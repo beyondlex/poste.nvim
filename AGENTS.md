@@ -4,7 +4,7 @@ Shared infrastructure and Rust CLI for the Poste ecosystem. Required by [poste-h
 
 ## What's Here
 
-- `lua/poste/` — Shared Lua modules (state.lua, select.lua, indicators.lua, cli.lua, util.lua, install.lua, error.lua, async/promise.lua, state/event.lua, constants.lua, core.lua)
+- `lua/poste/` — Shared Lua modules (state.lua, select.lua, indicators.lua, cli.lua, util.lua, text.lua, install.lua, error.lua, async/promise.lua, state/event.lua, constants.lua, core.lua)
 - `crates/` — Rust workspace (poste-core, poste-exec, poste-cli)
 - `plugin/poste-core.lua` — Plugin loader
 - `.opencode/skills/` — Shared skills (arch-review, neovim-performance, refactor)
@@ -19,5 +19,5 @@ This repo is protocol-agnostic. HTTP and SQL are handled by separate repos. Key 
 |------|-------|
 | Rust crates | `crates/poste-core/src/`, `crates/poste-exec/src/`, `crates/poste-cli/src/` |
 | Lua shared modules | `lua/poste/` |
-| Build & test | `docs/dev/testing.md` in poste-http.nvim |
+| Build & test | `cargo test` (Rust, CI-gated incl. fmt); `tests/run.sh` (Lua, plenary) |
 | Agent learnings | `LEARNINGS.md` |
