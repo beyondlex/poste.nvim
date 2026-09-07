@@ -1,12 +1,15 @@
 use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
-use lapin::options::{BasicAckOptions, BasicConsumeOptions, BasicNackOptions};
+use lapin::acker::Acker;
+use lapin::options::{
+    BasicAckOptions, BasicCancelOptions, BasicConsumeOptions, BasicNackOptions, BasicQosOptions,
+};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 /// Persistent AMQP session (poste-mq.nvim P1-5): keeps one connection open
 /// across requests and hosts live push consumers for the interactive tail
@@ -19,12 +22,28 @@ use tokio::sync::mpsc;
 ///           {"type":"message","consumer":..,"message":{..}}  push events
 ///           {"type":"session","status":"closed"}             on shutdown
 /// Consumers default to requeue mode (non-destructive tail, requirements
-/// §3.5); ack mode removes messages.
+/// §3.5); ack mode removes messages. Requeue-mode forwarders do NOT nack
+/// per message (that redelivers the same message instantly forever); they
+/// hold deliveries unacked under a prefetch cap and, on consumer stop or
+/// session close, cancel the consumer then batch-nack the held deliveries
+/// back to the queue.
 #[derive(Parser)]
 pub struct MqSessionArgs {
     /// AMQP connection URL (amqp:// or amqps://)
     #[arg(long)]
     pub connection: String,
+}
+
+/// Cap on unacked in-flight deliveries (channel QoS). Bounds the requeue-mode
+/// watch buffer and gives ack-mode consumers backpressure against floods.
+const WATCH_PREFETCH: u16 = 500;
+
+/// Live consumer registry entry: forwarder task + stop signal. The stop
+/// signal lets the task requeue outstanding deliveries before exiting,
+/// instead of abort() leaving messages in unacked limbo.
+struct ConsumerHandle {
+    task: tokio::task::JoinHandle<()>,
+    stop: oneshot::Sender<()>,
 }
 
 pub async fn execute(args: MqSessionArgs) -> Result<()> {
@@ -56,8 +75,8 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
         }
     });
 
-    // consumer name → forwarder task handle (abort on stop)
-    let mut consumers: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+    // consumer name → forwarder task handle + stop signal (abort on stop)
+    let mut consumers: HashMap<String, ConsumerHandle> = HashMap::new();
 
     let mut stdout_lines = BufReader::new(tokio::io::stdin()).lines();
     let mut session_ok = true;
@@ -92,10 +111,27 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
                         .unwrap_or_default()
                         .to_string();
                     let ack = req.get("ack").and_then(|a| a.as_bool()).unwrap_or(false);
+                    if consumers.contains_key(&consumer_name) {
+                        let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"error",
+                                "error":format!("consumer already running: {}", consumer_name)}));
+                        continue;
+                    }
+                    // Bounded in-flight deliveries (QoS). Watch mode holds
+                    // unacked deliveries until stop, so this must be bounded
+                    // or the session would buffer the whole queue.
+                    if let Err(e) = channel
+                        .basic_qos(WATCH_PREFETCH, BasicQosOptions::default())
+                        .await
+                    {
+                        let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"error",
+                                "error":format!("qos failed: {}", e)}));
+                        continue;
+                    }
+                    let consumer_tag = format!("poste-{}", consumer_name);
                     let consumer = channel
                         .basic_consume(
                             queue.as_str(),
-                            &format!("poste-{}", consumer_name),
+                            &consumer_tag,
                             BasicConsumeOptions::default(),
                             Default::default(),
                         )
@@ -103,29 +139,35 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
                     match consumer {
                         Ok(stream) => {
                             let tx = tx.clone();
+                            let chan = channel.clone();
                             let name = consumer_name.clone();
+                            let tag = consumer_tag.clone();
+                            let (stop_tx, stop_rx) = oneshot::channel();
                             let handle = tokio::spawn(async move {
                                 let mut stream = stream;
-                                while let Some(delivery_result) = stream.next().await {
-                                    match delivery_result {
+                                let mut stop_rx = stop_rx;
+                                // Unacked deliveries held for batch-requeue on
+                                // stop (non-destructive watch, no redelivery loop).
+                                let mut pending: Vec<Acker> = Vec::new();
+                                loop {
+                                    let next = tokio::select! {
+                                        delivery = stream.next() => delivery,
+                                        _ = &mut stop_rx => None,
+                                    };
+                                    let Some(delivery) = next else {
+                                        break;
+                                    };
+                                    match delivery {
                                         Ok(delivery) => {
-                                            // settle before printing so the
-                                            // queue depth stays truthful
+                                            let message = delivery_to_message(&delivery, 0);
                                             if ack {
                                                 let _ = delivery
                                                     .acker
                                                     .ack(BasicAckOptions::default())
                                                     .await;
                                             } else {
-                                                let _ = delivery
-                                                    .acker
-                                                    .nack(BasicNackOptions {
-                                                        requeue: true,
-                                                        ..Default::default()
-                                                    })
-                                                    .await;
+                                                pending.push(delivery.acker);
                                             }
-                                            let message = delivery_to_message(&delivery, 0);
                                             if tx
                                                 .send(json!({
                                                     "type": "message",
@@ -147,8 +189,30 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
                                         }
                                     }
                                 }
+                                // Stop/close: unregister the consumer FIRST (so
+                                // requeued messages cannot bounce straight back
+                                // into this consumer), then return the held
+                                // deliveries to the queue. Order matters:
+                                // basic_cancel alone does NOT requeue while the
+                                // channel stays open.
+                                let _ =
+                                    chan.basic_cancel(&tag, BasicCancelOptions::default()).await;
+                                for acker in pending {
+                                    let _ = acker
+                                        .nack(BasicNackOptions {
+                                            requeue: true,
+                                            ..Default::default()
+                                        })
+                                        .await;
+                                }
                             });
-                            consumers.insert(consumer_name.clone(), handle);
+                            consumers.insert(
+                                consumer_name.clone(),
+                                ConsumerHandle {
+                                    task: handle,
+                                    stop: stop_tx,
+                                },
+                            );
                             let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"ok",
                                     "value":{"consumer":consumer_name,"queue":queue}}));
                         }
@@ -161,7 +225,10 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
                 }
                 "stop" => {
                     if let Some(handle) = consumers.remove(&consumer_name) {
-                        handle.abort();
+                        // Signal the forwarder so it batch-requeues any held
+                        // deliveries before unregistering, then wait for it.
+                        let _ = handle.stop.send(());
+                        let _ = handle.task.await;
                     }
                     let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"ok",
                             "value":{"consumer":consumer_name,"stopped":true}}));
@@ -208,10 +275,15 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
     }
 
     for (_, handle) in consumers.drain() {
-        handle.abort();
+        let _ = handle.stop.send(());
+        let _ = handle.task.await;
     }
     let _ = connection.close(0, "").await;
+    // Drop BOTH senders before joining the writer: main_tx still in scope
+    // here would keep rx open forever and deadlock writer.await (the old
+    // code relied on the Lua jobstart timeout kill to reap the process).
     drop(tx);
+    drop(main_tx);
     let _ = writer.await;
     if !session_ok {
         std::process::exit(1);
