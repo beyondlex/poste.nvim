@@ -19,22 +19,43 @@ end
 setup_hl()
 vim.api.nvim_create_autocmd("ColorScheme", { callback = setup_hl })
 
+--- Word-wrap text at spaces, falling back to a hard break. Widths are
+--- DISPLAY widths (CJK chars count 2 columns) and every cut lands on a
+--- character boundary (strcharpart), so multi-byte text is never split
+--- into invalid UTF-8 — the byte-based version emitted half-characters
+--- for any width not divisible by the character width.
 local function word_wrap(text, max_width)
-  if #text <= max_width then return { text } end
+  if max_width <= 0 then return { text } end
+  if vim.fn.strdisplaywidth(text) <= max_width then return { text } end
   local lines = {}
-  while #text > 0 do
-    if #text <= max_width then
-      table.insert(lines, text)
+  local nchars = vim.fn.strchars(text)
+  local start = 0
+  while start < nchars do
+    local remaining = vim.fn.strcharpart(text, start)
+    if vim.fn.strdisplaywidth(remaining) <= max_width then
+      table.insert(lines, remaining)
       break
     end
-    local slice = text:sub(1, max_width)
+    -- largest character prefix of `remaining` that fits max_width columns
+    local fit, width = 0, 0
+    for i = 0, nchars - start - 1 do
+      local cw = vim.fn.strdisplaywidth(vim.fn.strcharpart(remaining, i, 1))
+      if width + cw > max_width then break end
+      width = width + cw
+      fit = fit + 1
+    end
+    if fit == 0 then fit = 1 end -- a single char wider than the line: emit it anyway
+    local slice = vim.fn.strcharpart(remaining, 0, fit)
+    -- prefer a break at the last whitespace inside the fitted slice
     local space_pos = slice:match("^.*()%s")
-    if space_pos then
-      table.insert(lines, text:sub(1, space_pos - 1))
-      text = text:sub(space_pos + 1):match("^%s*(.*)")
+    if space_pos and space_pos > 1 then
+      table.insert(lines, slice:sub(1, space_pos - 1))
+      local rest = remaining:sub(space_pos):match("^%s*(.*)")
+      if rest == "" then break end
+      start = nchars - vim.fn.strchars(rest)
     else
-      table.insert(lines, text:sub(1, max_width))
-      text = text:sub(max_width + 1)
+      table.insert(lines, slice)
+      start = start + fit
     end
   end
   return lines
@@ -100,10 +121,10 @@ function M.dynamic_line(opts)
   local dw = vim.fn.strdisplaywidth(s)
   if dw > content_width then
     local el_dw = vim.fn.strdisplaywidth(ellipsis)
-    local avail = content_width - el_dw
     -- strcharpart offsets are CHAR indices, not byte indices — deriving them
     -- from #s split multi-byte characters in half
     local nchars = vim.fn.strchars(s)
+    local avail = math.max(0, content_width - el_dw)
     if truncate_at == "left" then
       local keep = str_keep_tail(s, nchars, avail)
       return string.rep(" ", pad_left) .. ellipsis .. keep .. string.rep(" ", pad_right)
@@ -329,7 +350,11 @@ function M.keymaps(opts)
   end
 
   local line = table.concat(parts)
-  line = line:sub(1, -#sep - 1)
+  -- strip the trailing separator (only when entries were appended — with an
+  -- empty mapping the concat is just the prefix and must not be trimmed)
+  if #mapping > 0 then
+    line = line:sub(1, -#sep - 1)
+  end
 
   return { lines = { line }, highlights = highlights }
 end

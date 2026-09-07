@@ -22,13 +22,32 @@ describe("poste.layout", function()
 
     it("never splits a multi-byte character in half", function()
       local cjk = string.rep("数据库", 20) -- 60 chars, 3 bytes each
-      local lines = layout.word_wrap(cjk, 9)
+      -- width 10 is deliberately NOT divisible by 3: the old byte-slicing
+      -- version passed at width 9 only because 9 % 3 == 0 and emitted a
+      -- half-character at width 10
+      local lines = layout.word_wrap(cjk, 10)
       assert.is_true(#lines > 1)
       for _, l in ipairs(lines) do
         -- every returned line must be valid UTF-8 (round-trips through
         -- strchars with no replacement): a byte-cut line would fail this
         assert.are.equal(vim.fn.strcharpart(l, 0, vim.fn.strchars(l)), l)
+        assert.is_true(vim.fn.strdisplaywidth(l) <= 10, "line overflows: " .. l)
       end
+      -- rejoining the pieces reproduces the input
+      assert.are.equal(cjk, table.concat(lines))
+    end)
+
+    it("wraps CJK text with spaces at the spaces", function()
+      local lines = layout.word_wrap("数据库 查询 分析 引擎测试", 8)
+      assert.is_true(#lines > 1)
+      for _, l in ipairs(lines) do
+        assert.is_true(vim.fn.strdisplaywidth(l) <= 8, "line overflows: " .. l)
+      end
+    end)
+
+    it("handles a single character wider than the width without hanging", function()
+      local lines = layout.word_wrap("数据库", 1)
+      assert.are.same({ "数", "据", "库" }, lines)
     end)
   end)
 
@@ -82,6 +101,17 @@ describe("poste.layout", function()
       })
       assert.is_truthy(mid:find("..."))
     end)
+
+    it("survives a content width narrower than the ellipsis", function()
+      -- avail used to go negative → strcharpart with a negative count
+      local line = layout.dynamic_line({
+        text = "abcdefgh",
+        container_width = 3,
+        truncate_at = "right",
+      })
+      assert.is_truthy(#line > 0)
+      assert.are.equal(3, vim.fn.strdisplaywidth(line))
+    end)
   end)
 
   describe("progress", function()
@@ -117,6 +147,12 @@ describe("poste.layout", function()
       } })
       assert.truthy(out.lines[1]:find("%[g%? help%]"))
       assert.truthy(out.lines[1]:find("%[q close%]"))
+    end)
+
+    it("keeps the prefix intact when mapping is empty", function()
+      -- the old unconditional sub() used to shave a char off the prefix
+      local out = layout.keymaps({ mapping = {}, indent = 4 })
+      assert.are.equal("    ", out.lines[1])
     end)
   end)
 
