@@ -176,6 +176,47 @@ function M.download(version)
   return true
 end
 
+--- Get the git tag of the plugin checkout, if HEAD is exactly on a release tag.
+--- Used to match binary version to plugin version. Returns nil in dev mode
+--- (where HEAD is not on a tag).
+--- Defined above ensure(): a local declared after a call site is not in
+--- scope there — ensure()'s body would resolve the name as a *global*
+--- (nil at runtime), and the scheduled version check would error.
+local function plugin_tag()
+  local src = debug.getinfo(1, "S").source
+  if not src or src:sub(1, 1) ~= "@" then return nil end
+  -- src is @/path/to/plugin/lua/poste/install.lua, plugin root is ../../../
+  local root = src:sub(2):match("^(.+/)lua/poste/install%.lua$")
+  if not root then return nil end
+  local git_dir = root .. ".git"
+  if vim.fn.isdirectory(git_dir) ~= 1 and vim.fn.filereadable(git_dir) ~= 1 then
+    return nil
+  end
+  local handle = io.popen(
+    "cd " .. vim.fn.shellescape(root) .. " && git describe --tags --exact-match 2>/dev/null"
+  )
+  if not handle then return nil end
+  local tag = handle:read("*a"):gsub("%s+", "")
+  handle:close()
+  if tag == "" then return nil end
+  return tag
+end
+
+--- Async version sync: if the plugin checkout is on a release tag that
+--- differs from the installed binary, download the matching version.
+--- Scheduled by ensure() whenever the resolved binary is the managed
+--- data-path install (not a dev build or explicit override).
+local function schedule_version_sync()
+  vim.schedule(function()
+    local ok, tag = pcall(plugin_tag)
+    if not ok or not tag then return end
+    local installed = M.installed_version()
+    if installed ~= tag then
+      M.download(tag)
+    end
+  end)
+end
+
 --- Ensure the binary is available.
 --- Called at plugin startup. Returns the binary path if found, nil otherwise.
 --- Checks (in order): vim.g.poste_binary, user config, local dev build,
@@ -191,11 +232,18 @@ function M.ensure()
     return vim.fn.fnamemodify(g, ":p")
   end
 
-  -- 1. User-configured path (state.config.poste_binary)
+  -- 1. User-configured path (state.config.poste_binary). Note the config
+  --    default IS the managed data path below, so a readable config value
+  --    equal to binary_path() must still run the version sync — resolving
+  --    through it here used to return before step 4 and silently disable
+  --    the sync for the default configuration.
   local state_ok, state = pcall(require, "poste.state")
   if state_ok and state.config.poste_binary ~= "" then
     local p = state.config.poste_binary
     if vim.fn.filereadable(p) == 1 then
+      if p == binary_path() then
+        schedule_version_sync()
+      end
       return vim.fn.fnamemodify(p, ":p")
     end
   end
@@ -225,16 +273,7 @@ function M.ensure()
   -- 4. Default installed path (stdpath data)
   local bp = binary_path()
   if vim.fn.filereadable(bp) == 1 then
-    -- Async version sync: if the plugin checkout is on a release tag that
-    -- differs from the installed binary, download the matching version.
-    vim.schedule(function()
-      local tag = plugin_tag()  -- luacheck: ignore 113
-      if not tag then return end
-      local installed = M.installed_version()
-      if installed ~= tag then
-        M.download(tag)
-      end
-    end)
+    schedule_version_sync()
     return bp
   end
 
@@ -265,29 +304,6 @@ function M.installed_version()
   local v = f:read("*l")
   f:close()
   return v
-end
-
---- Get the git tag of the plugin checkout, if HEAD is exactly on a release tag.
---- Used to match binary version to plugin version. Returns nil in dev mode
---- (where HEAD is not on a tag).
-local function plugin_tag()  -- luacheck: ignore 211
-  local src = debug.getinfo(1, "S").source
-  if not src or src:sub(1, 1) ~= "@" then return nil end
-  -- src is @/path/to/plugin/lua/poste/install.lua, plugin root is ../../../
-  local root = src:sub(2):match("^(.+/)lua/poste/install%.lua$")
-  if not root then return nil end
-  local git_dir = root .. ".git"
-  if vim.fn.isdirectory(git_dir) ~= 1 and vim.fn.filereadable(git_dir) ~= 1 then
-    return nil
-  end
-  local handle = io.popen(
-    "cd " .. vim.fn.shellescape(root) .. " && git describe --tags --exact-match 2>/dev/null"
-  )
-  if not handle then return nil end
-  local tag = handle:read("*a"):gsub("%s+", "")
-  handle:close()
-  if tag == "" then return nil end
-  return tag
 end
 
 return M
