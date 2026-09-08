@@ -50,16 +50,20 @@ end
 function M.once(event, handler)
   local wrapper
   wrapper = function(data)
-    handler(data)
-    -- Unsubscribe after first invocation
+    -- pcall FIRST: a failing handler must still be unsubscribed, or `once`
+    -- retries it (and re-notifies) on every subsequent emit. The error is
+    -- rethrown so M.emit's pcall reports it like any other handler failure.
+    local ok, err = pcall(handler, data)
     local handlers = M._handlers[event]
-    if not handlers then return end
-    for i, h in ipairs(handlers) do
-      if h == wrapper then
-        table.remove(handlers, i)
-        return
+    if handlers then
+      for i, h in ipairs(handlers) do
+        if h == wrapper then
+          table.remove(handlers, i)
+          break
+        end
       end
     end
+    if not ok then error(err, 0) end
   end
   return M.on(event, wrapper)
 end
