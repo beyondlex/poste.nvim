@@ -162,6 +162,14 @@ function M.download(version)
     vim.fn.system({ "chmod", "+x", BIN_DIR .. "/poste" })
   end
 
+  -- extraction was never checked: a corrupt archive / full disk used to fall
+  -- through, stamp the .version file and report success with no binary present
+  local extracted = BIN_DIR .. (platform:find("windows") and "/poste.exe" or "/poste")
+  if vim.fn.filereadable(extracted) ~= 1 then
+    vim.notify("[Poste] Extraction failed — binary missing from archive", vim.log.levels.ERROR)
+    return false
+  end
+
   local version_tag = version
   if not version_tag:match("^v") and version_tag ~= "latest" then
     version_tag = "v" .. version_tag

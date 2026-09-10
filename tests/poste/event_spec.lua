@@ -41,6 +41,9 @@ describe("poste.state.event", function()
     vim.notify = function() notified = notified + 1 end
     event.emit("test:evt")
     event.emit("test:evt")
+    -- emit reports through vim.schedule; drain the loop before counting or
+    -- the assertion races the scheduled notify (flaky pass/fail)
+    vim.wait(100, function() return notified > 0 end)
     vim.notify = ok_notify
     assert.equals(1, calls, "failing once-handler must not be retried")
     assert.equals(1, notified, "emit reports the failure exactly once")
