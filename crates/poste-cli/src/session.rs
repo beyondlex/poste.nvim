@@ -656,7 +656,7 @@ fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize, _col_type: &s
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Ok(parsed) = serde_json::from_str::<Value>(&v) {
+        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
             return parsed;
         }
         return json!(v);
@@ -756,7 +756,7 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> 
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Ok(parsed) = serde_json::from_str::<Value>(&v) {
+        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
             return parsed;
         }
         if upper == "TIMESTAMPTZ" || upper == "TIMESTAMP WITH TIME ZONE" {
@@ -862,7 +862,7 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col_type: &str) 
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Ok(parsed) = serde_json::from_str::<Value>(&v) {
+        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
             return parsed;
         }
         if upper == "TIMESTAMP" || upper == "TIMESTAMP WITHOUT TIME ZONE" {
@@ -876,7 +876,7 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col_type: &str) 
     }
     if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
         let s = String::from_utf8_lossy(&v);
-        if let Ok(parsed) = serde_json::from_str::<Value>(&s) {
+        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&s) {
             return parsed;
         }
         return json!(s.to_string());

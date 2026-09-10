@@ -162,7 +162,7 @@ fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize) -> Value {
     }
 
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Ok(parsed) = serde_json::from_str::<Value>(&v) {
+        if let Some(parsed) = sql_parser::parse_json_cell(&v) {
             return parsed;
         }
         return json!(v);

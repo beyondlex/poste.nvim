@@ -254,6 +254,22 @@ pub fn blank_string_literals(stmt: &str) -> String {
     out.into_iter().collect()
 }
 
+/// Parse a TEXT/BLOB cell as JSON only when it is *structurally* JSON.
+///
+/// Returns `Some(parsed)` for values starting with `{` or `[`, else `None`.
+/// Cell values that merely LOOK scalar-JSON (`123`, `null`, `true`) must stay
+/// strings: SQLite has no column-level JSON type to gate on, so an unguarded
+/// `serde_json::from_str` turns the text `"123"` into the number 123 and the
+/// text `"null"` into SQL-style NULL — data misrepresentation, not parsing.
+pub fn parse_json_cell(text: &str) -> Option<serde_json::Value> {
+    let trimmed = text.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        serde_json::from_str(trimmed).ok()
+    } else {
+        None
+    }
+}
+
 /// Check if a SQL statement is a USE statement (e.g., `USE dbname`).
 /// Returns the database name if so.
 pub fn detect_use_statement(stmt: &str) -> Option<String> {
@@ -447,6 +463,36 @@ mod tests {
         assert!(blanked.to_uppercase().contains("RETURNING"));
         // Same char length (newlines inside the literal become spaces).
         assert_eq!(blanked.chars().count(), stmt.chars().count());
+    }
+
+    // ---- parse_json_cell (structural-JSON-only cell parsing) ----
+
+    #[test]
+    fn test_parse_json_cell_scalar_text_stays_string() {
+        // Scalar-looking text must NOT be coerced — the text "null" parsed
+        // with unguarded from_str becomes SQL-NULL to the reader.
+        assert!(parse_json_cell("123").is_none());
+        assert!(parse_json_cell("null").is_none());
+        assert!(parse_json_cell("true").is_none());
+        assert!(parse_json_cell("-1.5").is_none());
+    }
+
+    #[test]
+    fn test_parse_json_cell_structural_parses() {
+        assert_eq!(
+            parse_json_cell(r#"{"a": 1}"#),
+            Some(serde_json::json!({"a": 1}))
+        );
+        assert_eq!(parse_json_cell("[1, 2]"), Some(serde_json::json!([1, 2])));
+        // Leading whitespace is tolerated (values may carry padding).
+        assert_eq!(parse_json_cell("  [1]"), Some(serde_json::json!([1])));
+    }
+
+    #[test]
+    fn test_parse_json_cell_broken_structural_is_none() {
+        // Malformed structural JSON falls back to the raw string.
+        assert!(parse_json_cell("{not json").is_none());
+        assert!(parse_json_cell("[1,").is_none());
     }
 
     #[test]

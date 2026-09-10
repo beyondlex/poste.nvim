@@ -1202,7 +1202,7 @@ fn sqlite_value_to_json(
     }
 
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) {
+        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
             return parsed;
         }
         return json!(v);
@@ -1307,7 +1307,7 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> 
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) {
+        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
             return parsed;
         }
         // TIMESTAMPTZ string fallback (for types that report as string)
@@ -1421,7 +1421,7 @@ fn mysql_value_to_json(
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) {
+        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
             return parsed;
         }
         // TIMESTAMP string fallback (for types that report as string)
@@ -1436,7 +1436,7 @@ fn mysql_value_to_json(
     }
     if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
         let s = String::from_utf8_lossy(&v);
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
+        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&s) {
             return parsed;
         }
         return json!(s.to_string());
@@ -1751,6 +1751,66 @@ SELECT * FROM t;
         assert_eq!(
             update["affected_rows"], 1,
             "UPDATE must report affected_rows"
+        );
+    }
+
+    #[test]
+    fn test_sqlite_scalar_looking_text_stays_string() {
+        // TEXT values that merely look like scalar JSON must come back as
+        // strings, not be coerced into numbers/bools/null.
+        let dir = tempfile::tempdir().unwrap();
+        let sql_path = dir.path().join("test.sql");
+
+        let sql_content = r#"-- @connection test_conn
+CREATE TABLE t (v TEXT);
+INSERT INTO t VALUES ('123'), ('null'), ('true'), ('[1,2]'), ('{"a":1}');
+SELECT v FROM t ORDER BY rowid;
+"#;
+        std::fs::write(&sql_path, sql_content).unwrap();
+
+        let conn_json = serde_json::json!({
+            "test_conn": {
+                "dialect": "sqlite",
+                "database": ":memory:"
+            }
+        });
+        std::fs::write(
+            dir.path().join("connections.json"),
+            serde_json::to_string_pretty(&conn_json).unwrap(),
+        )
+        .unwrap();
+
+        let args = ExecFileArgs {
+            file: sql_path.to_string_lossy().to_string(),
+            env: "dev".to_string(),
+            mode: "greedy".to_string(),
+            timeout: 10,
+            max_rows: 1000,
+            json: true,
+            database: None,
+            connection: Some("test_conn".to_string()),
+        };
+
+        let events = collect_events(&args);
+        let result_events: Vec<&serde_json::Value> =
+            events.iter().filter(|e| e["type"] == "result").collect();
+        let select = result_events.last().unwrap();
+        let rows = select["rows"].as_array().unwrap();
+
+        assert_eq!(rows[0][0], "123", "text '123' must stay a string");
+        assert_eq!(rows[1][0], "null", "text 'null' must stay a string");
+        assert_eq!(rows[2][0], "true", "text 'true' must stay a string");
+        // Structural JSON (objects/arrays) still parses — useful for
+        // json_object()/json_array() results.
+        assert_eq!(
+            rows[3][0],
+            serde_json::json!([1, 2]),
+            "array-shaped text parses as JSON"
+        );
+        assert_eq!(
+            rows[4][0],
+            serde_json::json!({"a": 1}),
+            "object-shaped text parses as JSON"
         );
     }
 
