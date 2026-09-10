@@ -413,7 +413,7 @@ where
         emit(&progress.to_string());
 
         let stmt_start = Instant::now();
-        let upper = stmt_trimmed.to_uppercase();
+        let upper = poste_core::sql_parser::blank_string_literals(stmt_trimmed).to_uppercase();
 
         let stmt_result: anyhow::Result<StatementResult> = async {
             if upper.starts_with("SELECT")
@@ -864,7 +864,7 @@ where
         emit(&progress.to_string());
 
         let stmt_start = Instant::now();
-        let upper = stmt_trimmed.to_uppercase();
+        let upper = poste_core::sql_parser::blank_string_literals(stmt_trimmed).to_uppercase();
 
         let stmt_result: anyhow::Result<StatementResult> = async {
             if upper.starts_with("SELECT")
@@ -1046,7 +1046,7 @@ where
         emit(&progress.to_string());
 
         let stmt_start = Instant::now();
-        let upper = stmt_trimmed.to_uppercase();
+        let upper = poste_core::sql_parser::blank_string_literals(stmt_trimmed).to_uppercase();
 
         let stmt_result: anyhow::Result<StatementResult> = async {
             if upper.starts_with("SELECT")
@@ -1698,6 +1698,60 @@ SELECT 1;
         let result_events: Vec<&serde_json::Value> =
             events.iter().filter(|e| e["type"] == "result").collect();
         assert_eq!(result_events.len(), 3);
+    }
+
+    #[test]
+    fn test_sqlite_returning_word_in_literal_stays_dml() {
+        // 'returning' inside a string literal must not flip the INSERT/UPDATE
+        // onto the fetch path — the results must still carry affected_rows.
+        let dir = tempfile::tempdir().unwrap();
+        let sql_path = dir.path().join("test.sql");
+
+        let sql_content = r#"-- @connection test_conn
+CREATE TABLE t (msg TEXT);
+INSERT INTO t VALUES ('returning merchandise');
+UPDATE t SET msg = 'returning' WHERE msg = 'returning merchandise';
+SELECT * FROM t;
+"#;
+        std::fs::write(&sql_path, sql_content).unwrap();
+
+        let conn_json = serde_json::json!({
+            "test_conn": {
+                "dialect": "sqlite",
+                "database": ":memory:"
+            }
+        });
+        std::fs::write(
+            dir.path().join("connections.json"),
+            serde_json::to_string_pretty(&conn_json).unwrap(),
+        )
+        .unwrap();
+
+        let args = ExecFileArgs {
+            file: sql_path.to_string_lossy().to_string(),
+            env: "dev".to_string(),
+            mode: "greedy".to_string(),
+            timeout: 10,
+            max_rows: 1000,
+            json: true,
+            database: None,
+            connection: Some("test_conn".to_string()),
+        };
+
+        let events = collect_events(&args);
+        let result_events: Vec<&serde_json::Value> =
+            events.iter().filter(|e| e["type"] == "result").collect();
+
+        let insert = result_events[1].as_object().unwrap();
+        assert_eq!(
+            insert["affected_rows"], 1,
+            "INSERT must report affected_rows"
+        );
+        let update = result_events[2].as_object().unwrap();
+        assert_eq!(
+            update["affected_rows"], 1,
+            "UPDATE must report affected_rows"
+        );
     }
 
     #[test]

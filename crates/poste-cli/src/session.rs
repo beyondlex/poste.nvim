@@ -100,7 +100,7 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
         }
 
         let stmt_start = Instant::now();
-        let upper = sql.to_uppercase();
+        let upper = poste_core::sql_parser::blank_string_literals(&sql).to_uppercase();
         let result = if upper.starts_with("SELECT")
             || upper.starts_with("WITH")
             || upper.starts_with("EXPLAIN")
@@ -235,7 +235,7 @@ async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64
         }
 
         let stmt_start = Instant::now();
-        let upper = sql.to_uppercase();
+        let upper = poste_core::sql_parser::blank_string_literals(&sql).to_uppercase();
         let result = if upper.starts_with("SELECT")
             || upper.starts_with("WITH")
             || upper.starts_with("EXPLAIN")
@@ -371,7 +371,7 @@ async fn session_mysql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
         }
 
         let stmt_start = Instant::now();
-        let upper = sql.to_uppercase();
+        let upper = poste_core::sql_parser::blank_string_literals(&sql).to_uppercase();
         let result = if upper.starts_with("SELECT")
             || upper.starts_with("WITH")
             || upper.starts_with("EXPLAIN")

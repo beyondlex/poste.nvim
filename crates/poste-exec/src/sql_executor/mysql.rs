@@ -40,7 +40,7 @@ pub(super) async fn execute_mysql(
         let stmt_conn = current_url.clone();
         let stmt_result: anyhow::Result<StatementResult> = async {
             let stmt_start = Instant::now();
-            let upper = stmt.trim().to_uppercase();
+            let upper = sql_parser::blank_string_literals(stmt.trim()).to_uppercase();
 
             if upper.starts_with("SELECT")
                 || upper.starts_with("WITH")

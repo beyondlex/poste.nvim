@@ -168,6 +168,92 @@ pub fn split_statements(body: &str) -> Vec<String> {
     statements
 }
 
+/// A copy of `stmt` with the *contents* of string literals blanked to spaces,
+/// for keyword-heuristic classification.
+///
+/// Classification code wants to answer "does this statement contain the
+/// keyword RETURNING?" — but `upper.contains("RETURNING")` also matches the
+/// word inside a literal (`UPDATE t SET note = 'returning'`), which used to
+/// flip a DML statement onto the fetch path and lose its affected-row count.
+/// Classify on this blanked view instead.
+///
+/// Same length in characters as the input (literals become spaces), so
+/// offsets are stable. Handles single-quoted strings and double-quoted
+/// identifiers with doubled-quote escapes (`''`, `""`), and Postgres
+/// dollar-quoted strings (`$$...$$`, `$tag$...$tag$`). Backslash escapes
+/// (`\'`) are intentionally NOT interpreted: this is a heuristic view, not a
+/// parser, and the worst case (MySQL `\'` ends the blanked run early)
+/// degrades to the pre-fix behavior for that one statement.
+pub fn blank_string_literals(stmt: &str) -> String {
+    let chars: Vec<char> = stmt.chars().collect();
+    let mut out = vec![' '; chars.len()];
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' || c == '"' {
+            out[i] = ' ';
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == c {
+                    if i + 1 < chars.len() && chars[i + 1] == c {
+                        i += 2; // doubled quote — still inside the literal
+                    } else {
+                        i += 1; // closing quote
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        } else if c == '$' {
+            // Postgres dollar quote: `$$` or `$tag$` with tag
+            // [A-Za-z_][A-Za-z0-9_]*. Anything else is a literal `$`.
+            let mut j = i + 1;
+            if j < chars.len() && chars[j] != '$' {
+                if !(chars[j].is_ascii_alphabetic() || chars[j] == '_') {
+                    out[i] = '$';
+                    i += 1;
+                    continue;
+                }
+                while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                    j += 1;
+                }
+            }
+            if j < chars.len() && chars[j] == '$' {
+                let tag: Vec<char> = chars[i..=j].to_vec();
+                let tag_len = tag.len();
+                // Find the closing tag and blank everything through it.
+                let mut k = i + tag_len;
+                'closing: while k + tag_len <= chars.len() {
+                    if chars[k..k + tag_len] == tag[..] {
+                        // chars[i..k+tag_len] are already blanked via `out`
+                        // init except this opening tag — blank it explicitly.
+                        for slot in out[i..k + tag_len].iter_mut() {
+                            *slot = ' ';
+                        }
+                        i = k + tag_len;
+                        break 'closing;
+                    }
+                    k += 1;
+                }
+                if k + tag_len > chars.len() {
+                    // Unterminated dollar quote: treat the `$` as literal and
+                    // move on (matches split_statements' unterminated handling).
+                    out[i] = '$';
+                    i += 1;
+                }
+            } else {
+                out[i] = '$';
+                i += 1;
+            }
+        } else {
+            out[i] = c;
+            i += 1;
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// Check if a SQL statement is a USE statement (e.g., `USE dbname`).
 /// Returns the database name if so.
 pub fn detect_use_statement(stmt: &str) -> Option<String> {
@@ -277,6 +363,90 @@ mod tests {
         );
         assert_eq!(detect_use_statement("SELECT 1"), None);
         assert_eq!(detect_use_statement("USELESS"), None);
+    }
+
+    // ---- blank_string_literals (keyword-heuristic view) ----
+
+    fn has_returning(stmt: &str) -> bool {
+        blank_string_literals(stmt)
+            .to_uppercase()
+            .contains("RETURNING")
+    }
+
+    #[test]
+    fn test_blank_literals_returning_in_string_not_matched() {
+        // The bug this helper exists for: a literal containing "returning"
+        // must not flip DML onto the fetch path.
+        assert!(!has_returning(
+            "INSERT INTO log (msg) VALUES ('returning item')"
+        ));
+        assert!(!has_returning(
+            "UPDATE t SET note = 'returning' WHERE id = 1"
+        ));
+        assert!(!has_returning(
+            "UPDATE t SET \"returning\" = true WHERE id = 1"
+        ));
+    }
+
+    #[test]
+    fn test_blank_literals_real_returning_clause_still_matched() {
+        assert!(has_returning("INSERT INTO t (a) VALUES (1) RETURNING id"));
+        assert!(has_returning("update t set a = 1 returning *"));
+        assert!(has_returning("DELETE FROM t WHERE id = 1 RETURNING id"));
+    }
+
+    #[test]
+    fn test_blank_literals_preserves_non_literal_text() {
+        assert_eq!(blank_string_literals("SELECT 1"), "SELECT 1");
+        // Entire literal (delimiters included) becomes spaces, same char length.
+        assert_eq!(blank_string_literals("SELECT 'abc', 2"), "SELECT      , 2");
+        assert_eq!(
+            blank_string_literals("SELECT \"a b\", 2").chars().count(),
+            "SELECT \"a b\", 2".chars().count()
+        );
+    }
+
+    #[test]
+    fn test_blank_literals_doubled_quote_escape() {
+        // 'it''s returning' — the doubled quote stays inside the literal.
+        assert_eq!(blank_string_literals("'it''s'"), "       ");
+        assert!(!has_returning("UPDATE t SET a = 'it''s returning'"));
+        assert_eq!(blank_string_literals("\"a\"\"b\""), "      ");
+    }
+
+    #[test]
+    fn test_blank_literals_unterminated_string() {
+        // Unterminated literal: blank to end, no panic.
+        assert_eq!(blank_string_literals("SELECT 'abc"), "SELECT     ");
+        assert_eq!(blank_string_literals("'"), " ");
+    }
+
+    #[test]
+    fn test_blank_literals_dollar_quoted() {
+        assert!(!has_returning(
+            "CREATE FUNCTION f() AS $$ SELECT 'returning'; $$ LANGUAGE sql"
+        ));
+        // Bare RETURNING inside a dollar-quoted body is blanked too.
+        assert!(!has_returning(
+            "CREATE FUNCTION f() AS $$ BEGIN RETURNING x; END $$ LANGUAGE plpgsql"
+        ));
+        assert!(has_returning("INSERT INTO t VALUES (1) RETURNING id"));
+        // Tagged dollar quotes.
+        assert!(!has_returning("CREATE FUNCTION f() AS $fn$ RETURNING $fn$"));
+        // Non-quotes: $1 positional parameter stays as-is.
+        assert_eq!(blank_string_literals("WHERE x = $1"), "WHERE x = $1");
+        // Unterminated dollar quote: `$` treated as literal.
+        assert_eq!(blank_string_literals("a $$ b"), "a $$ b");
+    }
+
+    #[test]
+    fn test_blank_literals_multiline_string() {
+        let stmt = "INSERT INTO t VALUES ('multi\nline returning') RETURNING id";
+        let blanked = blank_string_literals(stmt);
+        assert!(!blanked.contains("returning"));
+        assert!(blanked.to_uppercase().contains("RETURNING"));
+        // Same char length (newlines inside the literal become spaces).
+        assert_eq!(blanked.chars().count(), stmt.chars().count());
     }
 
     #[test]

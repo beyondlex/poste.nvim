@@ -91,7 +91,7 @@ pub(super) async fn execute_postgres(
                 }
                 None => (stmt.clone(), None, None),
             };
-            let upper = exec_stmt.trim().to_uppercase();
+            let upper = sql_parser::blank_string_literals(exec_stmt.trim()).to_uppercase();
 
             if upper.starts_with("SELECT")
                 || upper.starts_with("WITH")
