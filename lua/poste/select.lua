@@ -71,6 +71,10 @@ end
 
 -- Fallback: built-in floating window
 local function pick_float(items, prompt, on_select)
+  -- Line 1 is the search input: `PREFIX + search_text`. Typed text must land
+  -- after this prefix or the TextChangedI pattern below stops matching and
+  -- the search silently stops filtering.
+  local SEARCH_PREFIX = "\239\134\133 "
   local list_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = list_buf })
   vim.api.nvim_set_option_value("filetype", "PosteSelect", { buf = list_buf })
@@ -97,6 +101,13 @@ local function pick_float(items, prompt, on_select)
   local filtered = vim.deepcopy(items)
   local resolved = false
 
+  -- Put the cursor on the search line (after the prompt prefix). `i`/`a` in
+  -- normal mode may fire with the cursor parked on an item line after j/k —
+  -- entering insert there would type into the item list instead of the search.
+  local function focus_search()
+    pcall(vim.api.nvim_win_set_cursor, win, { 1, #SEARCH_PREFIX })
+  end
+
   local function resolve(result)
     if resolved then return end
     resolved = true
@@ -113,7 +124,7 @@ local function pick_float(items, prompt, on_select)
       end
       table.insert(display, label)
     end
-    local lines = { "\239\134\133 " .. search_text }
+    local lines = { SEARCH_PREFIX .. search_text }
     for idx, label in ipairs(display) do
       local prefix = (idx == selected_idx) and "▶ " or "  "
       table.insert(lines, prefix .. label)
@@ -170,8 +181,20 @@ local function pick_float(items, prompt, on_select)
   map("n", "<CR>", function() resolve(#filtered > 0 and filtered[selected_idx].key or nil) end)
   map("n", "<Esc>", function() resolve(nil) end)
   map("n", "q",     function() resolve(nil) end)
-  map("n", "i",     function() vim.cmd("startinsert!") end)
-  map("n", "a",     function() vim.cmd("startinsert!") end)
+  -- Enter insert mode appending at the search line. The banged variant
+  -- ("append after the char under the cursor") is load-bearing: some builds
+  -- clamp nvim_win_set_cursor to len-1, i.e. onto the prefix's trailing
+  -- space — appending after it still lands past "▸ " where the TextChangedI
+  -- pattern keeps matching. The unbanged variant would insert BEFORE that
+  -- space, putting typed chars inside the prompt and silently killing the
+  -- live filter.
+  local function start_insert()
+    focus_search()
+    vim.cmd("startinsert!")
+  end
+
+  map("n", "i",     start_insert)
+  map("n", "a",     start_insert)
 
   map("i", "<CR>",   function() vim.cmd("stopinsert"); resolve(#filtered > 0 and filtered[selected_idx].key or nil) end)
   map("i", "<Esc>",  function() vim.cmd("stopinsert"); resolve(nil) end)
@@ -183,7 +206,7 @@ local function pick_float(items, prompt, on_select)
     callback = function()
       if resolved then return end
       local lines = vim.api.nvim_buf_get_lines(list_buf, 0, 1, false)
-      local new_search = (lines[1] or ""):match("^\239\134\133 (.*)$") or ""
+      local new_search = (lines[1] or ""):match("^" .. SEARCH_PREFIX .. "(.*)$") or ""
       if new_search ~= search_text then
         search_text = new_search
         filter_items()
@@ -192,7 +215,7 @@ local function pick_float(items, prompt, on_select)
   })
 
   render()
-  vim.cmd("startinsert!")
+  start_insert()
 end
 
 -- Last resort: vim.ui.select
