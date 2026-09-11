@@ -64,6 +64,8 @@ fn strip_directives(body: &str) -> String {
 /// Handles:
 /// - Semicolons inside single-quoted strings (`'it''s; a test'`)
 /// - Semicolons inside double-quoted identifiers (`"col;name"`)
+/// - Semicolons inside Postgres dollar-quoted bodies (`$$...;...$$`,
+///   `$fn$...;...$fn$`) — function/DO-block bodies routinely contain `;`
 /// - Semicolons inside `--` line comments
 /// - Semicolons inside `/* */` block comments
 /// - Escaped quotes (`''` inside strings, `""` inside identifiers)
@@ -143,6 +145,52 @@ pub fn split_statements(body: &str) -> Vec<String> {
                         Some(ch) => current.push(ch),
                         None => break,
                     }
+                }
+            }
+            // Postgres dollar quote: `$$` or `$tag$`. Consume through the
+            // closing tag so a `;` inside a function/DO-block body does not
+            // split the statement. `$1`-style placeholders (and any `$`
+            // not opening a valid tag) pass through untouched.
+            '$' => {
+                let mut tag = String::from("$");
+                let mut is_tag = true;
+                loop {
+                    match chars.peek() {
+                        Some('$') => {
+                            tag.push('$');
+                            chars.next();
+                            break;
+                        }
+                        Some(&c) if tag.len() == 1 && (c.is_ascii_alphabetic() || c == '_') => {
+                            tag.push(c);
+                            chars.next();
+                        }
+                        Some(&c) if tag.len() > 1 && (c.is_ascii_alphanumeric() || c == '_') => {
+                            tag.push(c);
+                            chars.next();
+                        }
+                        _ => {
+                            is_tag = false;
+                            break;
+                        }
+                    }
+                }
+                if is_tag {
+                    current.push_str(&tag);
+                    let tag_chars: Vec<char> = tag.chars().collect();
+                    let mut window: Vec<char> = Vec::new();
+                    for ch in chars.by_ref() {
+                        current.push(ch);
+                        window.push(ch);
+                        if window.len() > tag_chars.len() {
+                            window.remove(0);
+                        }
+                        if window.len() == tag_chars.len() && window == tag_chars {
+                            break; // closing tag consumed — back to normal scanning
+                        }
+                    }
+                } else {
+                    current.push_str(&tag);
                 }
             }
             // Statement terminator
@@ -366,6 +414,40 @@ mod tests {
     fn test_split_empty_statements_filtered() {
         let stmts = split_statements("SELECT 1;;; SELECT 2;");
         assert_eq!(stmts, vec!["SELECT 1", "SELECT 2"]);
+    }
+
+    #[test]
+    fn test_split_dollar_quoted_body_with_semicolon() {
+        // A `;` inside a dollar-quoted function/DO-block body must not split:
+        // the pieces would each fail with a syntax error at execution time.
+        let stmts =
+            split_statements("CREATE FUNCTION f() AS $$ BEGIN SELECT 1; END $$ LANGUAGE plpgsql;");
+        assert_eq!(
+            stmts,
+            vec!["CREATE FUNCTION f() AS $$ BEGIN SELECT 1; END $$ LANGUAGE plpgsql"]
+        );
+        assert_eq!(
+            split_statements("INSERT INTO t VALUES ($$a;b$$);"),
+            vec!["INSERT INTO t VALUES ($$a;b$$)"]
+        );
+        // Tagged dollar quotes.
+        assert_eq!(
+            split_statements("DO $fn$ LOOP x; END LOOP; $fn$; SELECT 2;"),
+            vec!["DO $fn$ LOOP x; END LOOP; $fn$", "SELECT 2"]
+        );
+    }
+
+    #[test]
+    fn test_split_dollar_non_tags_untouched() {
+        // `$1` positional parameters and stray `$` stay literal, like
+        // blank_string_literals.
+        assert_eq!(
+            split_statements("SELECT $1, $2 FROM t WHERE x = 'a;b';"),
+            vec!["SELECT $1, $2 FROM t WHERE x = 'a;b'"]
+        );
+        assert_eq!(split_statements("SELECT a $ b;"), vec!["SELECT a $ b"]);
+        // Truncated tag at end of body.
+        assert_eq!(split_statements("SELECT $fn"), vec!["SELECT $fn"]);
     }
 
     #[test]
