@@ -1327,6 +1327,18 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> 
     serde_json::Value::Null
 }
 
+/// Render raw bytes (BINARY/BLOB columns) as uppercase hex, matching
+/// MySQL's HEX() output for binary passes.
+fn mysql_binary_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0F) as usize] as char);
+    }
+    out
+}
+
 fn mysql_value_to_json(
     row: &sqlx::mysql::MySqlRow,
     idx: usize,
@@ -1407,6 +1419,12 @@ fn mysql_value_to_json(
             if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(idx) {
                 return json!(v.to_string());
             }
+        }
+        "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => {
+            if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
+                return json!(mysql_binary_to_hex(&v));
+            }
+            return serde_json::Value::Null;
         }
         _ => {}
     }
@@ -1870,6 +1888,20 @@ SELECT v FROM t ORDER BY rowid;
             err.contains("No SQL statements") || err.contains("No statements"),
             "Error: {}",
             err
+        );
+    }
+
+    #[test]
+    fn test_mysql_binary_to_hex() {
+        assert_eq!(mysql_binary_to_hex(b""), "");
+        assert_eq!(mysql_binary_to_hex(&[0x00, 0x0F, 0xA1]), "000FA1");
+        assert_eq!(
+            mysql_binary_to_hex(b"Hello, BINARY!"),
+            "48656C6C6F2C2042494E41525921"
+        );
+        assert_eq!(
+            mysql_binary_to_hex(&[0xFF, 0x00, 0x10, 0x1F, 0xA5, 0x5A]),
+            "FF00101FA55A"
         );
     }
 }

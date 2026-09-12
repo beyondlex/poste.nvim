@@ -46,6 +46,18 @@ pub(super) fn string_fallback(s: Option<String>, b: Option<Vec<u8>>) -> Value {
     }
 }
 
+/// Render raw bytes (BINARY/BLOB columns) as uppercase hex, matching
+/// MySQL's HEX() output for binary passes.
+pub(super) fn binary_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0F) as usize] as char);
+    }
+    out
+}
+
 pub(super) fn date_fallback(
     try_date: Option<sqlx::types::chrono::NaiveDate>,
     s: Option<String>,

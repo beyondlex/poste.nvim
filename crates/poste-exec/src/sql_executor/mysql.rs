@@ -270,6 +270,12 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize) -> Value {
         | "LONGTEXT" | "ENUM" | "SET" => {
             value::opt_json(row.try_get::<Option<String>, _>(idx).ok().flatten())
         }
+        "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => value::opt_json(
+            row.try_get::<Option<Vec<u8>>, _>(idx)
+                .ok()
+                .flatten()
+                .map(|v| value::binary_hex(&v)),
+        ),
         _ => value::string_fallback(
             row.try_get::<Option<String>, _>(idx).ok().flatten(),
             row.try_get::<Option<Vec<u8>>, _>(idx).ok().flatten(),
