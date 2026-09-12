@@ -16,6 +16,26 @@
 --- The highlight survives even when some other layout owns `content.active`,
 --- because `section_fileinfo` bakes `%#…#` markup into the context string
 --- itself (`my-blog/blog` renders highlighted under any layout).
+---
+--- Provider contract
+--- -----------------
+--- spec = { name = string, resolve = fun(win) -> ctx|nil } with
+--- ctx = { text = string, hl = string|nil, scope = "buffer"|"window"|"global" }.
+---
+--- - `text`/`hl` must be plain strings; the compose layer escapes `%` in
+---   both, so provider code never touches statusline markup itself.
+--- - `hl` groups belong to the provider and must be namespaced per plugin
+---   (`Poste<Plugin>Ctx…`, e.g. `PosteDbSqlCtxprod`, `PosteRedisCtxlocal`);
+---   the compose layer never defines highlight groups.
+--- - `resolve` runs on every statusline redraw (twice: `content.active`
+---   queries the hl, `section_fileinfo` queries the markup) and must be
+---   cheap — memoize on the provider side (fingerprint caches etc.).
+--- - A provider that errors or returns garbage (nil / non-string / empty
+---   `text`) is skipped, so one broken sibling never blanks the family
+---   statusline.
+--- - Registering an existing `name` replaces that entry in place (plugin
+---   reloads must not stack providers; the original slot — and therefore
+---   tie-break order — is preserved). `unregister_provider(name)` removes it.
 local M = {}
 
 local SCOPE_RANK = { buffer = 3, window = 2, global = 1 }
@@ -32,11 +52,37 @@ local installed = false
 ---                  scope = "buffer"|"window"|"global" } | nil) |
 ---   nil when the window does not belong to the provider (no context to show).
 ---   `scope` defaults to "window".
+--- Registering an already-known name replaces the previous entry in place,
+--- so plugin reloads don't stack providers (see header: Provider contract).
 function M.register_provider(spec)
+  if type(spec) ~= "table" or type(spec.name) ~= "string" or spec.name == ""
+      or type(spec.resolve) ~= "function" then
+    require("poste.error").warn(
+      ("poste.statusline: ignoring invalid provider spec (name=%s)")
+        :format(type(spec) == "table" and tostring(spec.name) or tostring(spec)))
+    return
+  end
+  for i, p in ipairs(providers) do
+    if p.name == spec.name then
+      providers[i] = { name = spec.name, resolve = spec.resolve }
+      return
+    end
+  end
   providers[#providers + 1] = {
     name = spec.name,
     resolve = spec.resolve,
   }
+end
+
+--- Remove a previously registered provider (plugin teardown / test setup).
+--- @param name string
+function M.unregister_provider(name)
+  for i, p in ipairs(providers) do
+    if p.name == name then
+      table.remove(providers, i)
+      return
+    end
+  end
 end
 
 --- Resolve the current window's context across all providers: the most
@@ -51,7 +97,9 @@ function M.resolve(win)
   local best_rank, best = nil, nil
   for _, p in ipairs(providers) do
     local ok, r = pcall(p.resolve, win)
-    if ok and r and r.text and r.text ~= "" then
+    -- type(r) == "table" + string text: malformed returns are skipped here so
+    -- markup() below can safely gsub the text
+    if ok and type(r) == "table" and type(r.text) == "string" and r.text ~= "" then
       local rank = SCOPE_RANK[r.scope] or 2
       if not best or rank > best_rank then
         best_rank = rank
@@ -74,8 +122,9 @@ local function markup(win)
   -- in raw makes every statusline redraw fail with E539 ("Illegal
   -- character"). Doubling it renders a literal `%`.
   local text = ctx.text:gsub("%%", "%%%%")
-  if ctx.hl then
-    return "%#" .. ctx.hl .. "# " .. text .. " "
+  if type(ctx.hl) == "string" and ctx.hl ~= "" then
+    local hl = ctx.hl:gsub("%%", "%%%%")
+    return "%#" .. hl .. "# " .. text .. " "
   end
   return text
 end

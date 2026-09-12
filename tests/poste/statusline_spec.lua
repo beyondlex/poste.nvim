@@ -153,6 +153,87 @@ describe("poste.statusline", function()
     end)
   end)
 
+  describe("provider registration contract", function()
+    it("re-registering a name replaces the entry in place", function()
+      shared.register_provider({
+        name = "db",
+        resolve = function() return { text = "old/blog", scope = "global" } end,
+      })
+      shared.register_provider({
+        name = "redis",
+        resolve = function() return { text = "r/blog", scope = "global" } end,
+      })
+      shared.register_provider({
+        name = "db",
+        resolve = function() return { text = "new/blog", scope = "global" } end,
+      })
+      assert.equals("new/blog", shared.resolve().text)
+      -- the stack did not grow: one unregister removes it entirely
+      shared.unregister_provider("db")
+      assert.equals("r/blog", shared.resolve().text)
+    end)
+
+    it("unregister_provider removes the provider", function()
+      shared.register_provider({
+        name = "a", resolve = function() return { text = "a", scope = "global" } end,
+      })
+      shared.register_provider({
+        name = "b", resolve = function() return { text = "b", scope = "global" } end,
+      })
+      shared.unregister_provider("a")
+      assert.equals("b", shared.resolve().text)
+      shared.unregister_provider("nonexistent")  -- no-op, must not error
+      assert.equals("b", shared.resolve().text)
+    end)
+
+    it("ignores invalid specs", function()
+      shared.register_provider(nil)
+      shared.register_provider({})
+      shared.register_provider({ name = "no-resolve" })
+      shared.register_provider({ name = "bad-resolve", resolve = "not-a-function" })
+      shared.register_provider({ name = "", resolve = function() return { text = "x" } end })
+      assert.is_nil(shared.resolve(), "no provider may have been registered")
+    end)
+  end)
+
+  describe("malformed provider returns", function()
+    it("skips non-string text and falls through to the next provider", function()
+      shared.register_provider({
+        name = "numeric",
+        resolve = function() return { text = 42, hl = "CtxNum" } end,
+      })
+      shared.register_provider({
+        name = "ok",
+        resolve = function() return { text = "ok/blog", hl = "CtxOk" } end,
+      })
+      assert.equals("ok/blog", shared.resolve().text)
+    end)
+
+    it("renders a non-string hl as plain text instead of erroring", function()
+      local ms = fake_mini()
+      shared.register_provider({
+        name = "weird",
+        resolve = function() return { text = "w/blog", hl = 42 } end,
+      })
+      shared._test.install()
+      assert.equals("w/blog", ms.section_fileinfo({}))
+    end)
+
+    it("escapes % in hl as well (E539 class)", function()
+      local ms = fake_mini()
+      shared.register_provider({
+        name = "pct-hl",
+        resolve = function() return { text = "p/blog", hl = "Ctx%100" } end,
+      })
+      shared._test.install()
+      local out = ms.section_fileinfo({})
+      assert.match("Ctx%%100# p/blog", out, 1, true)
+      assert.has_no.errors(function()
+        vim.api.nvim_eval_statusline(out, {})
+      end)
+    end)
+  end)
+
   describe("mini.statusline wiring", function()
     it("installs content.active + section_fileinfo with the provider context", function()
       local ms = fake_mini()
