@@ -70,10 +70,14 @@ end
 local function markup(win)
   local ctx = M.resolve(win)
   if not ctx then return "" end
+  -- `%` is the statusline escape character: a connection named "100%" baked
+  -- in raw makes every statusline redraw fail with E539 ("Illegal
+  -- character"). Doubling it renders a literal `%`.
+  local text = ctx.text:gsub("%%", "%%%%")
   if ctx.hl then
-    return "%#" .. ctx.hl .. "# " .. ctx.text .. " "
+    return "%#" .. ctx.hl .. "# " .. text .. " "
   end
-  return ctx.text
+  return text
 end
 
 --- Install the neutral mini.statusline hooks (synchronously; setup() defers

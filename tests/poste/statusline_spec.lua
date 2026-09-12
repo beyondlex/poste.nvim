@@ -183,6 +183,21 @@ describe("poste.statusline", function()
       assert.match("anon/blog", ms.section_fileinfo({}))
     end)
 
+    it("escapes % in the context text (statusline E539)", function()
+      local ms = fake_mini()
+      shared.register_provider({
+        name = "pct",
+        resolve = function() return { text = "100%/db", hl = "CtxPct" } end,
+      })
+      shared._test.install()
+      -- raw `%` makes nvim_eval_statusline fail with E539; the markup must
+      -- carry the doubled form so it renders literally
+      assert.match("100%%/db", ms.section_fileinfo({}), 1, true)
+      assert.has_no.errors(function()
+        vim.api.nvim_eval_statusline(ms.section_fileinfo({}), {})
+      end)
+    end)
+
     it("delegates to the original fileinfo when no provider matches", function()
       local ms = fake_mini()
       shared._test.install()
