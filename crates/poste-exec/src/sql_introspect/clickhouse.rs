@@ -130,7 +130,7 @@ pub(super) async fn introspect_clickhouse(params: &IntrospectParams) -> Result<V
                     json!({
                         "name": cell(&r, 0),
                         "total_size": "n/a",
-                        "table_count": as_u64(&cell(&r, 1)),
+                        "table_count": as_u64(cell(&r, 1)),
                         "encoding": cell(&r, 2),
                     })
                 })
@@ -150,14 +150,14 @@ pub(super) async fn introspect_clickhouse(params: &IntrospectParams) -> Result<V
                 .await?
                 .into_iter()
                 .map(|r| {
-                    let bytes = as_u64(&cell(&r, 3));
+                    let bytes = as_u64(cell(&r, 3));
                     json!({
                         "table_name": cell(&r, 0),
                         "schema_name": db,
                         "total_size": format!("{} KB", bytes / 1024),
                         "data_size": format!("{} KB", bytes / 1024),
                         "index_size": "0 KB",
-                        "row_count_estimate": as_u64(&cell(&r, 2)),
+                        "row_count_estimate": as_u64(cell(&r, 2)),
                         "comment": Value::Null,
                     })
                 })
@@ -188,12 +188,12 @@ async fn build_create_table(
     let columns: Vec<sql_ddl::ColumnDef> = col_rows
         .iter()
         .map(|r| {
-            let col_type = cell(&r, 1).as_str().unwrap_or_default().to_string();
+            let col_type = cell(r, 1).as_str().unwrap_or_default().to_string();
             sql_ddl::ColumnDef {
-                name: cell(&r, 0).as_str().unwrap_or_default().to_string(),
+                name: cell(r, 0).as_str().unwrap_or_default().to_string(),
                 col_type,
-                nullable: cell(&r, 1).as_str().unwrap_or("").starts_with("Nullable("),
-                default: cell(&r, 2).as_str().map(|s| s.to_string()),
+                nullable: cell(r, 1).as_str().unwrap_or("").starts_with("Nullable("),
+                default: cell(r, 2).as_str().map(|s| s.to_string()),
                 comment: None,
                 extra: None,
             }
@@ -204,7 +204,7 @@ async fn build_create_table(
     // first column as a stand-in (the generator appends ENGINE + ORDER BY).
     let mut pk_cols: Vec<String> = Vec::new();
     if let Some(first) = col_rows.first() {
-        if let Some(name) = first.get(0).and_then(|v| v.as_str()) {
+        if let Some(name) = first.first().and_then(|v| v.as_str()) {
             pk_cols.push(name.to_string());
         }
     }

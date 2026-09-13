@@ -338,12 +338,12 @@ pub fn find_all_statement_ranges(lines: &[&str]) -> Vec<(usize, usize)> {
     let out: Vec<(usize, usize)> = result
         .iter()
         .map(|&(s, e)| {
-            let start_line = byte_to_line(&line_offsets_helper(&lines), tokens[s].start);
+            let start_line = byte_to_line(&line_offsets_helper(lines), tokens[s].start);
             if e == 0 || e > tokens.len() {
                 (start_line, lines.len() - 1)
             } else {
                 let last = e.saturating_sub(1);
-                let end_line = byte_to_line(&line_offsets_helper(&lines), tokens[last].end);
+                let end_line = byte_to_line(&line_offsets_helper(lines), tokens[last].end);
                 (start_line, end_line)
             }
         })

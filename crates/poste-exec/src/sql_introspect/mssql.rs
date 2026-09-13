@@ -90,10 +90,10 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
                 .iter()
                 .map(|r| {
                     (
-                        cell(&r, 0).as_str().unwrap_or_default().to_string(),
+                        cell(r, 0).as_str().unwrap_or_default().to_string(),
                         (
-                            cell(&r, 1).as_str().unwrap_or_default().to_string(),
-                            cell(&r, 2).as_str().unwrap_or_default().to_string(),
+                            cell(r, 1).as_str().unwrap_or_default().to_string(),
+                            cell(r, 2).as_str().unwrap_or_default().to_string(),
                         ),
                     )
                 })
@@ -110,7 +110,7 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
                         "type": cell(&r, 1),
                         "nullable": cell(&r, 2).as_str() == Some("YES"),
                         "default": cell(&r, 3),
-                        "max_length": as_int(&cell(&r, 4)),
+                        "max_length": as_int(cell(&r, 4)),
                         "comment": Value::Null,
                         "fk_table": fk.map(|f| f.0.as_str()),
                         "fk_column": fk.map(|f| f.1.as_str()),
@@ -146,7 +146,7 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
             order
                 .into_iter()
                 .map(|name| {
-                    let (unique, is_pk) = meta[&name].clone();
+                    let (unique, is_pk) = meta[&name];
                     let cols = grouped[&name]
                         .iter()
                         .map(|c| c.as_str().unwrap_or_default().to_string())
@@ -195,7 +195,7 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
                     json!({
                         "name": cell(&r, 0),
                         "total_size": cell(&r, 1),
-                        "table_count": as_int(&cell(&r, 2)),
+                        "table_count": as_int(cell(&r, 2)),
                         "encoding": cell(&r, 3),
                     })
                 })
@@ -227,15 +227,15 @@ pub(super) async fn introspect_mssql(params: &IntrospectParams) -> Result<Value>
                 .unwrap_or_default()
                 .into_iter()
                 .map(|r| {
-                    let data_kb = as_int(&cell(&r, 3));
-                    let index_kb = as_int(&cell(&r, 4));
+                    let data_kb = as_int(cell(&r, 3));
+                    let index_kb = as_int(cell(&r, 4));
                     json!({
                         "table_name": cell(&r, 0),
                         "schema_name": cell(&r, 1),
                         "total_size": format!("{} KB", data_kb + index_kb),
                         "data_size": format!("{} KB", data_kb),
                         "index_size": format!("{} KB", index_kb),
-                        "row_count_estimate": as_int(&cell(&r, 2)),
+                        "row_count_estimate": as_int(cell(&r, 2)),
                         "comment": Value::Null,
                     })
                 })
@@ -266,10 +266,10 @@ async fn build_create_table(
     let columns: Vec<sql_ddl::ColumnDef> = col_rows
         .iter()
         .map(|r| sql_ddl::ColumnDef {
-            name: cell(&r, 0).as_str().unwrap_or_default().to_string(),
-            col_type: cell(&r, 1).as_str().unwrap_or_default().to_string(),
-            nullable: cell(&r, 2).as_str() == Some("YES"),
-            default: cell(&r, 3).as_str().map(|s| s.to_string()),
+            name: cell(r, 0).as_str().unwrap_or_default().to_string(),
+            col_type: cell(r, 1).as_str().unwrap_or_default().to_string(),
+            nullable: cell(r, 2).as_str() == Some("YES"),
+            default: cell(r, 3).as_str().map(|s| s.to_string()),
             comment: None,
             extra: None,
         })
@@ -289,7 +289,7 @@ async fn build_create_table(
     let mut pk_cols: Vec<String> = rows(client, &pk_sql)
         .await?
         .iter()
-        .map(|r| cell(&r, 0).as_str().unwrap_or_default().to_string())
+        .map(|r| cell(r, 0).as_str().unwrap_or_default().to_string())
         .collect();
     pk_cols.retain(|c| !c.is_empty());
 

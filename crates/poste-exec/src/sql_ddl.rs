@@ -512,7 +512,7 @@ impl DdlGenerator for ClickHouseDdl {
         let d = ClickHouseDialect;
         let q = |name: &str| d.quote_identifier(name);
 
-        let mut cols: Vec<String> = schema
+        let cols: Vec<String> = schema
             .columns
             .iter()
             .map(|c| format!("  {}", column_def_sql(c, &q)))

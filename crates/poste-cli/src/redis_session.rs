@@ -109,25 +109,23 @@ pub async fn execute(args: RedisSessionArgs) -> Result<()> {
             let rebuilt =
                 tokio::time::timeout(RECONNECT_TIMEOUT, client.get_multiplexed_async_connection())
                     .await;
-            match rebuilt {
-                Ok(Ok(fresh)) => {
-                    con = fresh;
-                    if let Some(db) = current_db.filter(|d| *d != 0) {
-                        let _ = redis::cmd("SELECT")
-                            .arg(db.to_string())
-                            .query_async::<String>(&mut con)
-                            .await;
-                    }
-                    attempt = tokio::time::timeout(
-                        COMMAND_TIMEOUT,
-                        execute_command_on(&mut con, &tokens, seq, max_items, max_bytes),
-                    )
-                    .await;
+            // Reconnect failed: fall through to the error outcome.
+            if let Ok(Ok(fresh)) = rebuilt {
+                con = fresh;
+                if let Some(db) = current_db.filter(|d| *d != 0) {
+                    let _ = redis::cmd("SELECT")
+                        .arg(db.to_string())
+                        .query_async::<String>(&mut con)
+                        .await;
                 }
-                _ => {} // reconnect failed: fall through to the error outcome
+                attempt = tokio::time::timeout(
+                    COMMAND_TIMEOUT,
+                    execute_command_on(&mut con, &tokens, seq, max_items, max_bytes),
+                )
+                .await;
             }
         }
-        let mut outcome = match attempt {
+        let outcome = match attempt {
             Ok(outcome) => outcome,
             Err(_) => poste_exec::redis_executor::CommandOutcome {
                 command: tokens.join(" "),

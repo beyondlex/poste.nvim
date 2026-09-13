@@ -20,10 +20,13 @@ use lapin::options::{
 };
 use lapin::types::{AMQPValue, FieldTable, ShortString};
 use lapin::ExchangeKind;
-use lapin::{
-    message::Delivery, uri::AMQPUri, BasicProperties, Channel, Connection, ConnectionProperties,
-};
+use lapin::{message::Delivery, BasicProperties, Channel, Connection, ConnectionProperties};
 use serde_json::{json, Value};
+
+/// Test-only: production code parses the connection URL through
+/// `validate_connection_url`/lapin directly.
+#[cfg(test)]
+use lapin::uri::AMQPUri;
 
 /// Per-operation outcomes for a batch (redis `CommandOutcome` shape).
 pub struct MqOutcome {
@@ -48,6 +51,9 @@ pub fn validate_connection_url(url: &str) -> Result<()> {
     }
 }
 
+/// Test-only: production code parses the connection URL through
+/// `validate_connection_url`/lapin directly.
+#[cfg(test)]
 fn parse_uri(url: &str) -> Result<AMQPUri> {
     url.parse::<AMQPUri>()
         .map_err(|e| anyhow::anyhow!("Invalid amqp URL: {}", e))
@@ -162,7 +168,7 @@ pub fn json_to_properties(p: &Value) -> BasicProperties {
     }
     if let Some(headers) = p
         .get("headers")
-        .filter(|h| h.as_object().map_or(false, |m| !m.is_empty()))
+        .filter(|h| h.as_object().is_some_and(|m| !m.is_empty()))
     {
         props = props.with_headers(json_to_field_table(headers));
     }
@@ -226,11 +232,13 @@ async fn op_publish(channel: &Channel, op: &Value) -> Result<Value> {
         .as_bytes()
         .to_vec();
     let props = json_to_properties(op.get("properties").unwrap_or(&Value::Null));
-    let mut options = BasicPublishOptions::default();
-    options.mandatory = op
-        .get("mandatory")
-        .and_then(|m| m.as_bool())
-        .unwrap_or(true);
+    let options = BasicPublishOptions {
+        mandatory: op
+            .get("mandatory")
+            .and_then(|m| m.as_bool())
+            .unwrap_or(true),
+        ..Default::default()
+    };
 
     // Publisher confirms: unroutable messages (mandatory + nothing bound)
     // come back via basic.return and MUST mark the operation failed
@@ -278,7 +286,7 @@ pub fn delivery_to_message(delivery: &Delivery, queue_depth: u32) -> Value {
         "payload_encoding": "string",
         "queue_depth": queue_depth,
     });
-    if let Ok(parsed) = serde_json::from_str::<Value>(&message["payload"].as_str().unwrap_or("")) {
+    if let Ok(parsed) = serde_json::from_str::<Value>(message["payload"].as_str().unwrap_or("")) {
         message["payload_json"] = parsed;
     }
     if let Some(t) = delivery.properties.timestamp() {
