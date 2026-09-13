@@ -18,6 +18,10 @@ jobs:
             os: ubuntu-latest
             name: x86_64-linux
             ext: ""
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            name: aarch64-linux
+            ext: ""
           - target: aarch64-apple-darwin
             os: macos-latest
             name: aarch64-macos
