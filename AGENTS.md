@@ -34,12 +34,9 @@ with sibling updates. Siblings' health checks probe the binary and report
 ## What's Here
 
 - `crates/` — Rust workspace (poste-core, poste-exec, poste-cli)
-- `.github/workflows/` — CI (fmt + clippy `-D warnings` + tests + luacheck)
-  and release (multi-platform artifacts + SHA256 checksums)
+- `.github/workflows/` — CI (fmt + clippy `-D warnings` + tests) and
+  release (multi-platform artifacts + SHA256 checksums)
 - `docs/schema.md` — the binary contract (start here for wire formats)
-- `lua/poste/` + `plugin/poste-core.lua` — compatibility stub only
-  (`require("poste").setup()` no-ops); delete after every sibling has
-  shipped a self-contained release and survived a release cycle
 
 ## References
 
@@ -47,5 +44,5 @@ with sibling updates. Siblings' health checks probe the binary and report
 |------|-------|
 | Binary contract (subcommands, wire formats, resolution rules) | `docs/schema.md` |
 | Rust crates | `crates/poste-core/src/`, `crates/poste-exec/src/`, `crates/poste-cli/src/` |
-| Build & test | `cargo test` (CI-gated incl. fmt + clippy `-D warnings` + luacheck on the stub) |
+| Build & test | `cargo test` (CI-gated incl. fmt + clippy `-D warnings`) |
 | Sibling plugins (UIs, their Lua, their test suites) | the sibling repos above |

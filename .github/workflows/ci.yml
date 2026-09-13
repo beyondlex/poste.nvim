@@ -43,28 +43,8 @@ jobs:
 
       - name: Check for TODO/FIXME/HACK
         run: |
-          ! grep -rn "TODO\|FIXME\|HACK" lua/ crates/ --include="*.lua" --include="*.rs" | grep -v ".md" | grep -v "target/" || exit 1
+          ! grep -rn "TODO\|FIXME\|HACK" crates/ --include="*.rs" | grep -v "target/" || exit 1
 
-  lua-check:
-    name: Lua lint (luacheck)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Lua
-        uses: leafo/gh-actions-lua@v10
-        with:
-          luaVersion: "5.1"
-
-      - name: Setup luarocks
-        uses: leafo/gh-actions-luarocks@v4
-
-      - name: Install luacheck
-        run: luarocks install luacheck
-
-      - name: Luacheck
-        run: luacheck lua/ --config .luacheckrc
-
-  # Lua tests were removed with the 2026-09-13 family dissolution: the Lua
-  # plugin family moved into the sibling repos (each runs its own suite).
-  # lua/poste/ is a compatibility stub, still luacheck-gated above.
+  # Lua jobs were removed with the 2026-09-13 family dissolution (and its
+  # cleanup): the Lua plugin family lives in the sibling repos, each with its
+  # own test suite; this repo is Rust-only now.

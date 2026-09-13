@@ -87,9 +87,8 @@ cargo fmt --all --check            # formatting gate
 
 Layout: `crates/poste-core` (request/SQL parsing, env management),
 `crates/poste-exec` (protocol executors), `crates/poste-cli` (the binary).
-`lua/poste/` is a compatibility stub (`require("poste").setup()` no-ops)
-kept until every sibling has shipped a self-contained release; the Lua
-plugin family now lives in the sibling repos and is tested there.
+The Lua plugin family lives in the sibling repos and is tested there — this
+repo is Rust-only.
 
 ## License
 
