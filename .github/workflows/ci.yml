@@ -65,20 +65,6 @@ jobs:
       - name: Luacheck
         run: luacheck lua/ --config .luacheckrc
 
-  lua-test:
-    name: Lua tests (plenary)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Neovim
-        uses: rhysd/action-setup-vim@v1
-        with:
-          neovim: true
-          version: stable
-
-      - name: Install plenary.nvim
-        run: git clone --depth 1 https://github.com/nvim-lua/plenary.nvim "$HOME/.local/share/nvim/lazy/plenary.nvim"
-
-      - name: Run Lua tests
-        run: ./tests/run.sh
+  # Lua tests were removed with the 2026-09-13 family dissolution: the Lua
+  # plugin family moved into the sibling repos (each runs its own suite).
+  # lua/poste/ is a compatibility stub, still luacheck-gated above.
