@@ -324,7 +324,11 @@ pub fn detect_use_statement(stmt: &str) -> Option<String> {
     let trimmed = stmt.trim();
     let upper = trimmed.to_uppercase();
     if upper.starts_with("USE ") {
-        let rest = trimmed[4..].trim();
+        // slice the ORIGINAL, defensively: to_uppercase can change byte
+        // lengths (ſ → SS, ß → SS), so `upper` starting with "USE " does not
+        // prove byte 4 of `trimmed` is a char boundary — `trimmed[4..]` could
+        // panic on exotic input ("uſe db")
+        let rest = trimmed.get(4..)?.trim();
         // Strip trailing semicolon if present
         let db = rest.trim_end_matches(';').trim();
         // Strip quotes if present
@@ -461,6 +465,10 @@ mod tests {
         );
         assert_eq!(detect_use_statement("SELECT 1"), None);
         assert_eq!(detect_use_statement("USELESS"), None);
+        // exotic case-folding: ſ uppercases to SS, so the uppercased prefix
+        // and the original's byte offsets disagree — slicing the original at
+        // byte 4 must stay panic-free regardless of where the boundary lands
+        assert_eq!(detect_use_statement("uſe db"), Some("db".to_string()));
     }
 
     // ---- blank_string_literals (keyword-heuristic view) ----
