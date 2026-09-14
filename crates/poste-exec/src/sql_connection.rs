@@ -44,25 +44,45 @@ const USERINFO_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b'|')
     .add(b'}');
 
-/// Normalize a SQLite connection string to `sqlite:<path>` format.
+/// Normalize a SQLite connection string to `sqlite:<path>[?mode=rwc]` format.
 /// Handles `sqlite:///`, `sqlite://`, `sqlite:`, plain paths, and `:memory:`.
+/// The create-if-missing flag is appended here (not just by `to_url`) so
+/// exec-file/session given a plain `sqlite:/new/file.db` actually create the
+/// file instead of failing with sqlx's default mode=rw "unable to open".
 pub fn normalize_sqlite_connection(conn: &str) -> anyhow::Result<String> {
     let conn = conn.trim();
 
     if conn.starts_with("sqlite:") && !conn.starts_with("sqlite://") {
-        return Ok(conn.to_string());
+        let path = conn.strip_prefix("sqlite:").unwrap_or(conn);
+        if path == ":memory:" || path == "/:memory:" {
+            return Ok("sqlite::memory:".to_string());
+        }
+        if path.is_empty() {
+            anyhow::bail!("Invalid SQLite connection string: {}", conn)
+        }
+        return Ok(format!("sqlite:{}", ensure_sqlite_create_flag(path)));
     }
 
     if let Some(rest) = conn.strip_prefix("sqlite:///") {
-        return Ok(format!("sqlite:/{}", rest));
+        if rest == ":memory:" {
+            return Ok("sqlite::memory:".to_string());
+        }
+        return Ok(format!(
+            "sqlite:{}",
+            ensure_sqlite_create_flag(&format!("/{}", rest))
+        ));
     }
 
     if let Some(rest) = conn.strip_prefix("sqlite://") {
-        return Ok(format!("sqlite:{}", rest));
+        return Ok(format!("sqlite:{}", ensure_sqlite_create_flag(rest)));
     }
 
-    if conn.starts_with('/') || conn.starts_with("./") || conn.starts_with(":memory:") {
-        return Ok(format!("sqlite:{}", conn));
+    if conn.starts_with('/') || conn.starts_with("./") {
+        return Ok(format!("sqlite:{}", ensure_sqlite_create_flag(conn)));
+    }
+
+    if conn == ":memory:" {
+        return Ok("sqlite::memory:".to_string());
     }
 
     anyhow::bail!("Invalid SQLite connection string: {}", conn)
@@ -120,6 +140,24 @@ fn normalize_dialect(dialect: &str) -> &str {
     }
 }
 
+/// sqlx 0.8 defaults sqlite URLs to mode=rw (no create), so a plain
+/// `sqlite:/new/file.db` connection fails with "unable to open database
+/// file". Append the create-if-missing flag without corrupting a path that
+/// already carries a query string (`f.db?cache=shared` gains `&mode=rwc`; a
+/// path that pins `mode=` is left untouched). Shared by `to_url` and
+/// `normalize_sqlite_connection` so every sqlite entry point creates files.
+fn ensure_sqlite_create_flag(path: &str) -> String {
+    if path.contains('?') {
+        if path.contains("mode=") {
+            path.to_string()
+        } else {
+            format!("{}&mode=rwc", path)
+        }
+    } else {
+        format!("{}?mode=rwc", path)
+    }
+}
+
 impl ConnectionConfig {
     /// Build a connection URL from the config.
     /// For SQLite, returns `sqlite:<path>[?mode=rwc]`.
@@ -131,19 +169,7 @@ impl ConnectionConfig {
                 if path == ":memory:" {
                     return "sqlite::memory:".to_string();
                 }
-                // sqlx 0.8 defaults to mode=rw (no create), so add the
-                // create-if-missing flag without corrupting a path that
-                // already carries a query string (`f.db?cache=shared` gains
-                // `&mode=rwc`; a path that pins `mode=` is left untouched).
-                if path.contains('?') {
-                    if path.contains("mode=") {
-                        format!("sqlite:{}", path)
-                    } else {
-                        format!("sqlite:{}&mode=rwc", path)
-                    }
-                } else {
-                    format!("sqlite:{}?mode=rwc", path)
-                }
+                format!("sqlite:{}", ensure_sqlite_create_flag(path))
             }
             "postgres" | "mysql" | "mssql" | "clickhouse" => {
                 let scheme = normalize_dialect(&self.dialect);
@@ -623,7 +649,7 @@ mod tests {
     fn test_normalize_sqlite_absolute_path() {
         assert_eq!(
             super::normalize_sqlite_connection("sqlite:///home/user/db.sqlite").unwrap(),
-            "sqlite:/home/user/db.sqlite"
+            "sqlite:/home/user/db.sqlite?mode=rwc"
         );
     }
 
@@ -631,11 +657,11 @@ mod tests {
     fn test_normalize_sqlite_relative_path() {
         assert_eq!(
             super::normalize_sqlite_connection("sqlite://./data.db").unwrap(),
-            "sqlite:./data.db"
+            "sqlite:./data.db?mode=rwc"
         );
         assert_eq!(
             super::normalize_sqlite_connection("sqlite://data.db").unwrap(),
-            "sqlite:data.db"
+            "sqlite:data.db?mode=rwc"
         );
     }
 
@@ -655,11 +681,11 @@ mod tests {
     fn test_normalize_sqlite_plain_path() {
         assert_eq!(
             super::normalize_sqlite_connection("/absolute/path.db").unwrap(),
-            "sqlite:/absolute/path.db"
+            "sqlite:/absolute/path.db?mode=rwc"
         );
         assert_eq!(
             super::normalize_sqlite_connection("./relative.db").unwrap(),
-            "sqlite:./relative.db"
+            "sqlite:./relative.db?mode=rwc"
         );
     }
 
@@ -667,7 +693,21 @@ mod tests {
     fn test_normalize_sqlite_already_correct() {
         assert_eq!(
             super::normalize_sqlite_connection("sqlite:/path.db").unwrap(),
-            "sqlite:/path.db"
+            "sqlite:/path.db?mode=rwc"
+        );
+    }
+
+    #[test]
+    fn test_normalize_sqlite_keeps_existing_query_and_pinned_mode() {
+        // an existing query string gains &mode=rwc…
+        assert_eq!(
+            super::normalize_sqlite_connection("sqlite:f.db?cache=shared").unwrap(),
+            "sqlite:f.db?cache=shared&mode=rwc"
+        );
+        // …and a pinned mode= is never duplicated
+        assert_eq!(
+            super::normalize_sqlite_connection("sqlite:f.db?mode=ro").unwrap(),
+            "sqlite:f.db?mode=ro"
         );
     }
 
