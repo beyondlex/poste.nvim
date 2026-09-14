@@ -101,88 +101,99 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
 
         let stmt_start = Instant::now();
         let upper = poste_core::sql_parser::blank_string_literals(&sql).to_uppercase();
-        let result = if upper.starts_with("SELECT")
+        let is_query = upper.starts_with("SELECT")
             || upper.starts_with("WITH")
             || upper.starts_with("EXPLAIN")
             || upper.starts_with("PRAGMA")
             || upper.starts_with("VALUES")
-            || upper.contains("RETURNING")
-        {
-            let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
-            let rows: Vec<sqlx::sqlite::SqliteRow> = if timeout_secs > 0 {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
-                    .await
-                {
-                    Ok(rows) => rows?,
-                    Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                }
+            || upper.contains("RETURNING");
+        // A per-statement failure (bad SQL, timeout) is an error EVENT, never
+        // a `?` — propagating it would kill the whole session process and
+        // drop the NDJSON loop with it (the mssql/clickhouse paths below
+        // already work this way; this keeps sqlite/pg/mysql in contract).
+        let stmt: anyhow::Result<Value> = async {
+            if is_query {
+                let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
+                let rows: Vec<sqlx::sqlite::SqliteRow> = if timeout_secs > 0 {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                        .await
+                    {
+                        Ok(rows) => rows?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    fetch.await?
+                };
+                let elapsed = stmt_start.elapsed().as_millis() as u64;
+                let row_count = rows.len() as u64;
+                let truncated = max_rows > 0 && row_count > max_rows;
+                let display_rows = if max_rows > 0 {
+                    std::cmp::min(row_count, max_rows) as usize
+                } else {
+                    row_count as usize
+                };
+                let col_types: Vec<String> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| col.type_info().name().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let columns: Vec<Value> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let json_rows: Vec<Vec<Value>> = rows
+                    .iter()
+                    .take(display_rows)
+                    .map(|row| {
+                        (0..row.len())
+                            .map(|i| {
+                                sqlite_value_to_json(row, i, col_types.get(i).map_or("", |s| s))
+                            })
+                            .collect()
+                    })
+                    .collect();
+                Ok(json!({
+                    "type": "result", "seq": seq, "status": "ok",
+                    "sql": sql, "row_count": row_count,
+                    "affected_rows": null,
+                    "execution_time_ms": elapsed, "columns": columns,
+                    "rows": json_rows, "rows_truncated": truncated,
+                }))
             } else {
-                fetch.await?
-            };
-            let elapsed = stmt_start.elapsed().as_millis() as u64;
-            let row_count = rows.len() as u64;
-            let truncated = max_rows > 0 && row_count > max_rows;
-            let display_rows = if max_rows > 0 {
-                std::cmp::min(row_count, max_rows) as usize
-            } else {
-                row_count as usize
-            };
-            let col_types: Vec<String> = rows
-                .first()
-                .map(|first_row| {
-                    first_row
-                        .columns()
-                        .iter()
-                        .map(|col| col.type_info().name().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let columns: Vec<Value> = rows
-                .first()
-                .map(|first_row| {
-                    first_row
-                        .columns()
-                        .iter()
-                        .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let json_rows: Vec<Vec<Value>> = rows
-                .iter()
-                .take(display_rows)
-                .map(|row| {
-                    (0..row.len())
-                        .map(|i| sqlite_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
-                        .collect()
-                })
-                .collect();
-            json!({
-                "type": "result", "seq": seq, "status": "ok",
-                "sql": sql, "row_count": row_count,
-                "affected_rows": null,
-                "execution_time_ms": elapsed, "columns": columns,
-                "rows": json_rows, "rows_truncated": truncated,
-            })
-        } else {
-            let exec = sqlx::query(&sql).execute(&mut *conn);
-            let result = if timeout_secs > 0 {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec).await
-                {
-                    Ok(result) => result?,
-                    Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                }
-            } else {
-                exec.await?
-            };
-            let affected = result.rows_affected();
-            let elapsed = stmt_start.elapsed().as_millis() as u64;
-            json!({
-                "type": "result", "seq": seq, "status": "ok",
-                "sql": sql, "row_count": 0,
-                "affected_rows": affected,
-                "execution_time_ms": elapsed, "columns": [], "rows": [],
-            })
-        };
+                let exec = sqlx::query(&sql).execute(&mut *conn);
+                let result = if timeout_secs > 0 {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
+                        .await
+                    {
+                        Ok(result) => result?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    exec.await?
+                };
+                let affected = result.rows_affected();
+                let elapsed = stmt_start.elapsed().as_millis() as u64;
+                Ok(json!({
+                    "type": "result", "seq": seq, "status": "ok",
+                    "sql": sql, "row_count": 0,
+                    "affected_rows": affected,
+                    "execution_time_ms": elapsed, "columns": [], "rows": [],
+                }))
+            }
+        }
+        .await;
+        let result = stmt.unwrap_or_else(|e| error_result(seq, &sql, &e, &stmt_start));
         stdout
             .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
             .await?;
@@ -192,6 +203,16 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
     drop(conn);
     pool.close().await;
     Ok(())
+}
+
+/// Build a per-statement `status:"error"` result event for the session loop —
+/// statement failures must be events so the NDJSON session survives them.
+fn error_result(seq: u64, sql: &str, e: &anyhow::Error, started: &Instant) -> Value {
+    json!({
+        "type": "result", "seq": seq, "status": "error",
+        "sql": sql, "error": format!("{}", e),
+        "execution_time_ms": started.elapsed().as_millis() as u64,
+    })
 }
 
 async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64) -> Result<()> {
@@ -236,89 +257,95 @@ async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64
 
         let stmt_start = Instant::now();
         let upper = poste_core::sql_parser::blank_string_literals(&sql).to_uppercase();
-        let result = if upper.starts_with("SELECT")
+        let is_query = upper.starts_with("SELECT")
             || upper.starts_with("WITH")
             || upper.starts_with("EXPLAIN")
             || upper.starts_with("SHOW")
             || upper.starts_with("TABLE ")
             || upper.starts_with("VALUES")
-            || upper.contains("RETURNING")
-        {
-            let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
-            let rows: Vec<PgRow> = if timeout_secs > 0 {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
-                    .await
-                {
-                    Ok(rows) => rows?,
-                    Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                }
+            || upper.contains("RETURNING");
+        // per-statement errors are events, never session-killers (see sqlite)
+        let stmt: anyhow::Result<Value> = async {
+            if is_query {
+                let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
+                let rows: Vec<PgRow> = if timeout_secs > 0 {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                        .await
+                    {
+                        Ok(rows) => rows?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    fetch.await?
+                };
+                let elapsed = stmt_start.elapsed().as_millis() as u64;
+                let row_count = rows.len() as u64;
+                let truncated = max_rows > 0 && row_count > max_rows;
+                let display_rows = if max_rows > 0 {
+                    std::cmp::min(row_count, max_rows) as usize
+                } else {
+                    row_count as usize
+                };
+                let col_types: Vec<String> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| col.type_info().name().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let columns: Vec<Value> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let json_rows: Vec<Vec<Value>> = rows
+                    .iter()
+                    .take(display_rows)
+                    .map(|row| {
+                        (0..row.len())
+                            .map(|i| pg_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
+                            .collect()
+                    })
+                    .collect();
+                Ok(json!({
+                    "type": "result", "seq": seq, "status": "ok",
+                    "sql": sql, "row_count": row_count,
+                    "affected_rows": null,
+                    "execution_time_ms": elapsed, "columns": columns,
+                    "rows": json_rows, "rows_truncated": truncated,
+                }))
             } else {
-                fetch.await?
-            };
-            let elapsed = stmt_start.elapsed().as_millis() as u64;
-            let row_count = rows.len() as u64;
-            let truncated = max_rows > 0 && row_count > max_rows;
-            let display_rows = if max_rows > 0 {
-                std::cmp::min(row_count, max_rows) as usize
-            } else {
-                row_count as usize
-            };
-            let col_types: Vec<String> = rows
-                .first()
-                .map(|first_row| {
-                    first_row
-                        .columns()
-                        .iter()
-                        .map(|col| col.type_info().name().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let columns: Vec<Value> = rows
-                .first()
-                .map(|first_row| {
-                    first_row
-                        .columns()
-                        .iter()
-                        .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let json_rows: Vec<Vec<Value>> = rows
-                .iter()
-                .take(display_rows)
-                .map(|row| {
-                    (0..row.len())
-                        .map(|i| pg_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
-                        .collect()
-                })
-                .collect();
-            json!({
-                "type": "result", "seq": seq, "status": "ok",
-                "sql": sql, "row_count": row_count,
-                "affected_rows": null,
-                "execution_time_ms": elapsed, "columns": columns,
-                "rows": json_rows, "rows_truncated": truncated,
-            })
-        } else {
-            let exec = sqlx::query(&sql).execute(&mut *conn);
-            let result = if timeout_secs > 0 {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec).await
-                {
-                    Ok(result) => result?,
-                    Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                }
-            } else {
-                exec.await?
-            };
-            let affected = result.rows_affected();
-            let elapsed = stmt_start.elapsed().as_millis() as u64;
-            json!({
-                "type": "result", "seq": seq, "status": "ok",
-                "sql": sql, "row_count": 0,
-                "affected_rows": affected,
-                "execution_time_ms": elapsed, "columns": [], "rows": [],
-            })
-        };
+                let exec = sqlx::query(&sql).execute(&mut *conn);
+                let result = if timeout_secs > 0 {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
+                        .await
+                    {
+                        Ok(result) => result?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    exec.await?
+                };
+                let affected = result.rows_affected();
+                let elapsed = stmt_start.elapsed().as_millis() as u64;
+                Ok(json!({
+                    "type": "result", "seq": seq, "status": "ok",
+                    "sql": sql, "row_count": 0,
+                    "affected_rows": affected,
+                    "execution_time_ms": elapsed, "columns": [], "rows": [],
+                }))
+            }
+        }
+        .await;
+        let result = stmt.unwrap_or_else(|e| error_result(seq, &sql, &e, &stmt_start));
         stdout
             .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
             .await?;
@@ -372,89 +399,97 @@ async fn session_mysql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
 
         let stmt_start = Instant::now();
         let upper = poste_core::sql_parser::blank_string_literals(&sql).to_uppercase();
-        let result = if upper.starts_with("SELECT")
+        let is_query = upper.starts_with("SELECT")
             || upper.starts_with("WITH")
             || upper.starts_with("EXPLAIN")
             || upper.starts_with("SHOW")
             || upper.starts_with("DESCRIBE")
             || upper.starts_with("DESC ")
-            || upper.contains("RETURNING")
-        {
-            let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
-            let rows: Vec<MySqlRow> = if timeout_secs > 0 {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
-                    .await
-                {
-                    Ok(rows) => rows?,
-                    Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                }
+            || upper.contains("RETURNING");
+        // per-statement errors are events, never session-killers (see sqlite)
+        let stmt: anyhow::Result<Value> = async {
+            if is_query {
+                let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
+                let rows: Vec<MySqlRow> = if timeout_secs > 0 {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
+                        .await
+                    {
+                        Ok(rows) => rows?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    fetch.await?
+                };
+                let elapsed = stmt_start.elapsed().as_millis() as u64;
+                let row_count = rows.len() as u64;
+                let truncated = max_rows > 0 && row_count > max_rows;
+                let display_rows = if max_rows > 0 {
+                    std::cmp::min(row_count, max_rows) as usize
+                } else {
+                    row_count as usize
+                };
+                let col_types: Vec<String> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| col.type_info().name().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let columns: Vec<Value> = rows
+                    .first()
+                    .map(|first_row| {
+                        first_row
+                            .columns()
+                            .iter()
+                            .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let json_rows: Vec<Vec<Value>> = rows
+                    .iter()
+                    .take(display_rows)
+                    .map(|row| {
+                        (0..row.len())
+                            .map(|i| {
+                                mysql_value_to_json(row, i, col_types.get(i).map_or("", |s| s))
+                            })
+                            .collect()
+                    })
+                    .collect();
+                Ok(json!({
+                    "type": "result", "seq": seq, "status": "ok",
+                    "sql": sql, "row_count": row_count,
+                    "affected_rows": null,
+                    "execution_time_ms": elapsed, "columns": columns,
+                    "rows": json_rows, "rows_truncated": truncated,
+                }))
             } else {
-                fetch.await?
-            };
-            let elapsed = stmt_start.elapsed().as_millis() as u64;
-            let row_count = rows.len() as u64;
-            let truncated = max_rows > 0 && row_count > max_rows;
-            let display_rows = if max_rows > 0 {
-                std::cmp::min(row_count, max_rows) as usize
-            } else {
-                row_count as usize
-            };
-            let col_types: Vec<String> = rows
-                .first()
-                .map(|first_row| {
-                    first_row
-                        .columns()
-                        .iter()
-                        .map(|col| col.type_info().name().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let columns: Vec<Value> = rows
-                .first()
-                .map(|first_row| {
-                    first_row
-                        .columns()
-                        .iter()
-                        .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let json_rows: Vec<Vec<Value>> = rows
-                .iter()
-                .take(display_rows)
-                .map(|row| {
-                    (0..row.len())
-                        .map(|i| mysql_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
-                        .collect()
-                })
-                .collect();
-            json!({
-                "type": "result", "seq": seq, "status": "ok",
-                "sql": sql, "row_count": row_count,
-                "affected_rows": null,
-                "execution_time_ms": elapsed, "columns": columns,
-                "rows": json_rows, "rows_truncated": truncated,
-            })
-        } else {
-            let exec = sqlx::query(&sql).execute(&mut *conn);
-            let result = if timeout_secs > 0 {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec).await
-                {
-                    Ok(result) => result?,
-                    Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                }
-            } else {
-                exec.await?
-            };
-            let affected = result.rows_affected();
-            let elapsed = stmt_start.elapsed().as_millis() as u64;
-            json!({
-                "type": "result", "seq": seq, "status": "ok",
-                "sql": sql, "row_count": 0,
-                "affected_rows": affected,
-                "execution_time_ms": elapsed, "columns": [], "rows": [],
-            })
-        };
+                let exec = sqlx::query(&sql).execute(&mut *conn);
+                let result = if timeout_secs > 0 {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
+                        .await
+                    {
+                        Ok(result) => result?,
+                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
+                    }
+                } else {
+                    exec.await?
+                };
+                let affected = result.rows_affected();
+                let elapsed = stmt_start.elapsed().as_millis() as u64;
+                Ok(json!({
+                    "type": "result", "seq": seq, "status": "ok",
+                    "sql": sql, "row_count": 0,
+                    "affected_rows": affected,
+                    "execution_time_ms": elapsed, "columns": [], "rows": [],
+                }))
+            }
+        }
+        .await;
+        let result = stmt.unwrap_or_else(|e| error_result(seq, &sql, &e, &stmt_start));
         stdout
             .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
             .await?;
