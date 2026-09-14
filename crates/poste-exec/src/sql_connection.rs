@@ -107,25 +107,46 @@ pub struct ConnectionConfig {
     pub extra_params: HashMap<String, String>,
 }
 
+/// Dialect aliases that normalize to a base dialect before any handling.
+/// Mirror of Lua `poste-db/constants.lua` `DIALECT_ALIASES` — the two
+/// name→URL resolvers are a documented mirror pair (docs/schema.md) and must
+/// not drift alone. Unknown names pass through unchanged.
+fn normalize_dialect(dialect: &str) -> &str {
+    match dialect {
+        "mariadb" | "tidb" | "singlestore" | "aurora-mysql" | "vitess" | "planetscale" => "mysql",
+        "postgresql" | "cockroachdb" | "yugabyte" | "aurora-postgres" | "neon" | "supabase"
+        | "timescaledb" => "postgres",
+        other => other,
+    }
+}
+
 impl ConnectionConfig {
     /// Build a connection URL from the config.
-    /// For SQLite, returns `sqlite://path`.
-    /// For Postgres/MySQL, builds the standard URL format.
+    /// For SQLite, returns `sqlite:<path>[?mode=rwc]`.
+    /// For Postgres/MySQL/MSSQL/ClickHouse, builds the standard URL format.
     pub fn to_url(&self) -> String {
-        match self.dialect.as_str() {
+        match normalize_dialect(&self.dialect) {
             "sqlite" => {
                 let path = self.path.as_deref().unwrap_or(":memory:");
-                // sqlx expects: sqlite::memory: or sqlite:/absolute/path or sqlite:relative/path
-                // sqlx 0.8 defaults to mode=rw (no create), so we add ?mode=rwc to create
-                // the file if it doesn't exist.
                 if path == ":memory:" {
-                    "sqlite::memory:".to_string()
+                    return "sqlite::memory:".to_string();
+                }
+                // sqlx 0.8 defaults to mode=rw (no create), so add the
+                // create-if-missing flag without corrupting a path that
+                // already carries a query string (`f.db?cache=shared` gains
+                // `&mode=rwc`; a path that pins `mode=` is left untouched).
+                if path.contains('?') {
+                    if path.contains("mode=") {
+                        format!("sqlite:{}", path)
+                    } else {
+                        format!("sqlite:{}&mode=rwc", path)
+                    }
                 } else {
                     format!("sqlite:{}?mode=rwc", path)
                 }
             }
             "postgres" | "mysql" | "mssql" | "clickhouse" => {
-                let scheme = self.dialect.as_str();
+                let scheme = normalize_dialect(&self.dialect);
                 let host = self.host.as_deref().unwrap_or("localhost");
                 let default_port = match scheme {
                     "postgres" => 5432,
@@ -134,7 +155,12 @@ impl ConnectionConfig {
                     _ => 1433,
                 };
                 let port = self.port.unwrap_or(default_port);
-                let db = self.database.as_deref().unwrap_or("");
+                // percent-encode the db like the user/password fields — a db
+                // name with `/`, spaces or unicode must not break the URL
+                let db = utf8_percent_encode(
+                    self.database.as_deref().unwrap_or(""),
+                    USERINFO_ENCODE_SET,
+                );
 
                 let auth = match (&self.user, &self.password) {
                     (Some(u), Some(p)) => format!(
@@ -185,11 +211,10 @@ impl ConnectionStore {
                 let content = std::fs::read_to_string(&path)?;
                 let mut connections: HashMap<String, ConnectionConfig> =
                     serde_json::from_str(&content)?;
-                // Normalize dialect aliases (e.g. mariadb → mysql)
+                // Normalize dialect aliases (postgresql → postgres,
+                // mariadb → mysql, …) — mirror of the Lua resolver
                 for conn in connections.values_mut() {
-                    if conn.dialect == "mariadb" {
-                        conn.dialect = "mysql".to_string();
-                    }
+                    conn.dialect = normalize_dialect(&conn.dialect).to_string();
                 }
                 Ok(Self {
                     connections,
@@ -644,5 +669,68 @@ mod tests {
             super::normalize_sqlite_connection("sqlite:/path.db").unwrap(),
             "sqlite:/path.db"
         );
+    }
+
+    #[test]
+    fn test_to_url_normalizes_dialect_aliases() {
+        // mirror parity with Lua DIALECT_ALIASES: an alias must build the
+        // base-dialect URL, never the silent empty-URL fallback
+        let mut config = ConnectionConfig {
+            dialect: "postgresql".to_string(),
+            host: Some("localhost".to_string()),
+            port: None,
+            database: Some("db".to_string()),
+            user: None,
+            password: None,
+            path: None,
+            ssl_mode: None,
+            extra_params: HashMap::new(),
+        };
+        assert_eq!(config.to_url(), "postgres://localhost:5432/db");
+        config.dialect = "mariadb".to_string();
+        assert_eq!(config.to_url(), "mysql://localhost:3306/db");
+        config.dialect = "cockroachdb".to_string();
+        assert_eq!(config.to_url(), "postgres://localhost:5432/db");
+        // unknown dialects still pass through (empty URL, as before)
+        config.dialect = "redis".to_string();
+        assert_eq!(config.to_url(), "");
+    }
+
+    #[test]
+    fn test_to_url_sqlite_keeps_existing_query_string() {
+        let mut config = ConnectionConfig {
+            dialect: "sqlite".to_string(),
+            host: None,
+            port: None,
+            database: None,
+            user: None,
+            password: None,
+            path: Some("./data/app.db?cache=shared".to_string()),
+            ssl_mode: None,
+            extra_params: HashMap::new(),
+        };
+        assert_eq!(
+            config.to_url(),
+            "sqlite:./data/app.db?cache=shared&mode=rwc"
+        );
+        // a pinned mode= is not duplicated
+        config.path = Some("./data/app.db?mode=rw".to_string());
+        assert_eq!(config.to_url(), "sqlite:./data/app.db?mode=rw");
+    }
+
+    #[test]
+    fn test_to_url_percent_encodes_database() {
+        let config = ConnectionConfig {
+            dialect: "postgres".to_string(),
+            host: Some("localhost".to_string()),
+            port: None,
+            database: Some("my db/prod".to_string()),
+            user: None,
+            password: None,
+            path: None,
+            ssl_mode: None,
+            extra_params: HashMap::new(),
+        };
+        assert_eq!(config.to_url(), "postgres://localhost:5432/my%20db%2Fprod");
     }
 }
