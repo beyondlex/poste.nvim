@@ -73,8 +73,12 @@ poste session --connection URL [--database NAME] [--timeout S] [--max-rows N]
 
 stdin/stdout NDJSON loop. Request: `{"seq": <u64>, "sql": "<string>"}`.
 Events: progress / `{"type":"result","seq":N,"status":"ok|error",...}`
-(same resultset shape as `exec-file`; the session path is the live value
-converter — `exec-file` must stay in sync with it). The process keeps the
+(same resultset shape as `exec-file`; session events carry no `total`
+key and error events report real elapsed). Both transports share ONE
+implementation of statement classification, truncation and value
+conversion (`poste-exec::sql_exec_common` / `sql_values`) — the old
+"session is the live value converter, exec-file must stay in sync"
+discipline is enforced by construction now. The process keeps the
 connection open; `USE <db>` and `SELECT` state persist across requests.
 
 ### `redis-exec` — one-shot pre-tokenized commands (poste-redis)
