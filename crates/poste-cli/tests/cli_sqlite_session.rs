@@ -27,12 +27,10 @@ fn next_event(rx: &Receiver<String>, timeout: Duration) -> serde_json::Value {
 }
 
 fn wait_result(rx: &Receiver<String>, seq: u64) -> serde_json::Value {
-    loop {
-        let ev = next_event(rx, Duration::from_secs(10));
-        assert_eq!(ev["type"], "result", "expected result, got: {ev}");
-        assert_eq!(ev["seq"].as_u64(), Some(seq), "wrong seq, got: {ev}");
-        return ev;
-    }
+    let ev = next_event(rx, Duration::from_secs(10));
+    assert_eq!(ev["type"], "result", "expected result, got: {ev}");
+    assert_eq!(ev["seq"].as_u64(), Some(seq), "wrong seq, got: {ev}");
+    ev
 }
 
 #[test]
