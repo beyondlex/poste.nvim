@@ -1,0 +1,7 @@
+{"seq":1,"sql":"CREATE TABLE nums (n INTEGER)","total":3,"type":"progress"}
+{"affected_rows":0,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":1,"sql":"CREATE TABLE nums (n INTEGER)","status":"ok","total":3,"type":"result"}
+{"seq":2,"sql":"INSERT INTO nums VALUES (1),(2),(3),(4),(5),(6),(7),(8)","total":3,"type":"progress"}
+{"affected_rows":8,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":2,"sql":"INSERT INTO nums VALUES (1),(2),(3),(4),(5),(6),(7),(8)","status":"ok","total":3,"type":"result"}
+{"seq":3,"sql":"SELECT n FROM nums ORDER BY n","total":3,"type":"progress"}
+{"affected_rows":null,"columns":[{"name":"n","type":"INTEGER"}],"execution_time_ms":0,"row_count":8,"rows":[[1],[2],[3]],"rows_truncated":true,"seq":3,"sql":"SELECT n FROM nums ORDER BY n","status":"ok","total":3,"type":"result"}
+{"connection":"sqlite:<TMP>/poste_golden_mr.sqlite","database":"poste_golden_mr","dialect":"sqlite","failed":0,"mode":"greedy","rolled_back":false,"succeeded":3,"total":3,"total_affected":8,"total_rows":8,"total_time_ms":0,"type":"summary"}

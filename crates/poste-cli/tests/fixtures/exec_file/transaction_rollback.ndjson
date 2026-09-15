@@ -1,0 +1,11 @@
+{"seq":1,"sql":"CREATE TABLE ledger (id INTEGER PRIMARY KEY, amount INTEGER)","total":5,"type":"progress"}
+{"affected_rows":0,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":1,"sql":"CREATE TABLE ledger (id INTEGER PRIMARY KEY, amount INTEGER)","status":"ok","total":5,"type":"result"}
+{"seq":2,"sql":"INSERT INTO ledger (amount) VALUES (100)","total":5,"type":"progress"}
+{"affected_rows":1,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":2,"sql":"INSERT INTO ledger (amount) VALUES (100)","status":"ok","total":5,"type":"result"}
+{"seq":3,"sql":"UPDATE ledger SET amount = amount - 10 WHERE id = 1","total":5,"type":"progress"}
+{"affected_rows":1,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":3,"sql":"UPDATE ledger SET amount = amount - 10 WHERE id = 1","status":"ok","total":5,"type":"result"}
+{"seq":4,"sql":"INSERT INTO ledger (amount) VALUES ('not a number')","total":5,"type":"progress"}
+{"affected_rows":1,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":4,"sql":"INSERT INTO ledger (amount) VALUES ('not a number')","status":"ok","total":5,"type":"result"}
+{"seq":5,"sql":"INSERT INTO ledger (amount) VALUES (999)","total":5,"type":"progress"}
+{"affected_rows":1,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":5,"sql":"INSERT INTO ledger (amount) VALUES (999)","status":"ok","total":5,"type":"result"}
+{"connection":"sqlite:<TMP>/poste_golden_transaction_rollback.sqlite","database":"poste_golden_transaction_rollback","dialect":"sqlite","failed":0,"mode":"transaction","rolled_back":false,"succeeded":5,"total":5,"total_affected":4,"total_rows":0,"total_time_ms":0,"type":"summary"}

@@ -1,0 +1,17 @@
+{"seq":1,"sql":"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, score REAL, note TEXT)","total":8,"type":"progress"}
+{"affected_rows":0,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":1,"sql":"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, score REAL, note TEXT)","status":"ok","total":8,"type":"result"}
+{"seq":2,"sql":"INSERT INTO users (name, score, note) VALUES\n  ('alice', 9.5, NULL),\n  ('bob', 7.0, 'has ; semicolon')","total":8,"type":"progress"}
+{"affected_rows":2,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":2,"sql":"INSERT INTO users (name, score, note) VALUES\n  ('alice', 9.5, NULL),\n  ('bob', 7.0, 'has ; semicolon')","status":"ok","total":8,"type":"result"}
+{"seq":3,"sql":"SELECT id, name, score, note FROM users ORDER BY id","total":8,"type":"progress"}
+{"affected_rows":null,"columns":[{"name":"id","type":"INTEGER"},{"name":"name","type":"TEXT"},{"name":"score","type":"REAL"},{"name":"note","type":"TEXT"}],"execution_time_ms":0,"row_count":2,"rows":[[1,"alice",9.5,null],[2,"bob",7.0,"has ; semicolon"]],"rows_truncated":false,"seq":3,"sql":"SELECT id, name, score, note FROM users ORDER BY id","status":"ok","total":8,"type":"result"}
+{"seq":4,"sql":"UPDATE users SET score = 10.0 WHERE id = 1","total":8,"type":"progress"}
+{"affected_rows":1,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":4,"sql":"UPDATE users SET score = 10.0 WHERE id = 1","status":"ok","total":8,"type":"result"}
+{"seq":5,"sql":"SELECT count(*) AS n FROM users","total":8,"type":"progress"}
+{"affected_rows":null,"columns":[{"name":"n","type":"NULL"}],"execution_time_ms":0,"row_count":1,"rows":[[2]],"rows_truncated":false,"seq":5,"sql":"SELECT count(*) AS n FROM users","status":"ok","total":8,"type":"result"}
+{"seq":6,"sql":"DELETE FROM users WHERE id = 2","total":8,"type":"progress"}
+{"affected_rows":1,"columns":[],"execution_time_ms":0,"row_count":0,"rows":[],"rows_truncated":false,"seq":6,"sql":"DELETE FROM users WHERE id = 2","status":"ok","total":8,"type":"result"}
+{"seq":7,"sql":"SELECT * FROM missing_table","total":8,"type":"progress"}
+{"error":"error returned from database: (code: 1) no such table: missing_table","execution_time_ms":0,"seq":7,"sql":"SELECT * FROM missing_table","status":"error","total":8,"type":"result"}
+{"seq":8,"sql":"SELECT 'unterminated;","total":8,"type":"progress"}
+{"error":"error returned from database: (code: 1) unrecognized token: \"'unterminated;\"","execution_time_ms":0,"seq":8,"sql":"SELECT 'unterminated;","status":"error","total":8,"type":"result"}
+{"connection":"sqlite:<TMP>/poste_golden_greedy_mixed.sqlite","database":"poste_golden_greedy_mixed","dialect":"sqlite","failed":2,"mode":"greedy","rolled_back":false,"succeeded":6,"total":8,"total_affected":4,"total_rows":3,"total_time_ms":0,"type":"summary"}
