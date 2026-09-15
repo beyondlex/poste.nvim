@@ -6,6 +6,8 @@ pub mod response;
 pub mod sql_connection;
 pub mod sql_ddl;
 pub mod sql_dialect;
+pub mod sql_exec_common;
 pub mod sql_executor;
 pub mod sql_introspect;
+pub mod sql_values;
 pub use response::Response;
