@@ -1,7 +1,11 @@
 use anyhow::Result;
 use clap::Parser;
-use rust_decimal::prelude::FromPrimitive;
+use poste_exec::sql_exec_common::{
+    clamp_rows, error_result_event, ok_result_event, run_sqlx_statement, StmtOutcome, MYSQL_QUERY,
+    POSTGRES_QUERY, SQLITE_QUERY,
+};
 use serde_json::{json, Value};
+use sqlx::Column as _;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -59,8 +63,33 @@ pub async fn execute(args: SessionArgs) -> Result<()> {
     }
 }
 
+/// Write one wire event as an NDJSON line and flush, so the Lua side sees
+/// each response the moment it is ready.
+async fn emit(stdout: &mut tokio::io::Stdout, ev: &Value) -> Result<()> {
+    stdout
+        .write_all(format!("{}\n", serde_json::to_string(ev)?).as_bytes())
+        .await?;
+    stdout.flush().await?;
+    Ok(())
+}
+
+/// Shared per-request tail for all five dialect loops: convert the outcome
+/// (or the failure) into the session wire event. Session events carry no
+/// `total` key; an error event reports the real elapsed time.
+fn session_result_event(
+    seq: u64,
+    sql: &str,
+    outcome: anyhow::Result<StmtOutcome>,
+    started: &Instant,
+) -> Value {
+    match outcome {
+        Ok(o) => ok_result_event(seq, None, sql, &o),
+        Err(e) => error_result_event(seq, None, sql, &e, started.elapsed().as_millis() as u64),
+    }
+}
+
 async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) -> Result<()> {
-    use sqlx::{Column, Row, TypeInfo};
+    use sqlx::TypeInfo;
 
     let conn_str = poste_exec::sql_connection::normalize_sqlite_connection(connection_url)?;
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -73,131 +102,30 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
     while let Some(line) = lines.next_line().await? {
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                let err = json!({"type":"result","seq":0,"status":"error","error":format!("JSON parse error: {}", e)});
-                stdout
-                    .write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes())
-                    .await?;
-                stdout.flush().await?;
+        let (seq, sql) = match parse_request(&line) {
+            Request::Run(seq, sql) => (seq, sql),
+            Request::Blank => continue,
+            Request::Malformed(msg) => {
+                let err = json!({"type":"result","seq":0,"status":"error","error":msg});
+                emit(&mut stdout, &err).await?;
                 continue;
             }
         };
-        let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-        let sql = req
-            .get("sql")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if sql.is_empty() {
-            continue;
-        }
 
-        let stmt_start = Instant::now();
-        let upper = poste_core::sql_parser::blank_string_literals(&sql).to_uppercase();
-        let is_query = upper.starts_with("SELECT")
-            || upper.starts_with("WITH")
-            || upper.starts_with("EXPLAIN")
-            || upper.starts_with("PRAGMA")
-            || upper.starts_with("VALUES")
-            || upper.contains("RETURNING");
-        // A per-statement failure (bad SQL, timeout) is an error EVENT, never
-        // a `?` — propagating it would kill the whole session process and
-        // drop the NDJSON loop with it (the mssql/clickhouse paths below
-        // already work this way; this keeps sqlite/pg/mysql in contract).
-        let stmt: anyhow::Result<Value> = async {
-            if is_query {
-                let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
-                let rows: Vec<sqlx::sqlite::SqliteRow> = if timeout_secs > 0 {
-                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
-                        .await
-                    {
-                        Ok(rows) => rows?,
-                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                    }
-                } else {
-                    fetch.await?
-                };
-                let elapsed = stmt_start.elapsed().as_millis() as u64;
-                let row_count = rows.len() as u64;
-                let truncated = max_rows > 0 && row_count > max_rows;
-                let display_rows = if max_rows > 0 {
-                    std::cmp::min(row_count, max_rows) as usize
-                } else {
-                    row_count as usize
-                };
-                let col_types: Vec<String> = rows
-                    .first()
-                    .map(|first_row| {
-                        first_row
-                            .columns()
-                            .iter()
-                            .map(|col| col.type_info().name().to_string())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let columns: Vec<Value> = rows
-                    .first()
-                    .map(|first_row| {
-                        first_row
-                            .columns()
-                            .iter()
-                            .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let json_rows: Vec<Vec<Value>> = rows
-                    .iter()
-                    .take(display_rows)
-                    .map(|row| {
-                        (0..row.len())
-                            .map(|i| {
-                                sqlite_value_to_json(row, i, col_types.get(i).map_or("", |s| s))
-                            })
-                            .collect()
-                    })
-                    .collect();
-                Ok(json!({
-                    "type": "result", "seq": seq, "status": "ok",
-                    "sql": sql, "row_count": row_count,
-                    "affected_rows": null,
-                    "execution_time_ms": elapsed, "columns": columns,
-                    "rows": json_rows, "rows_truncated": truncated,
-                }))
-            } else {
-                let exec = sqlx::query(&sql).execute(&mut *conn);
-                let result = if timeout_secs > 0 {
-                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
-                        .await
-                    {
-                        Ok(result) => result?,
-                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                    }
-                } else {
-                    exec.await?
-                };
-                let affected = result.rows_affected();
-                let elapsed = stmt_start.elapsed().as_millis() as u64;
-                Ok(json!({
-                    "type": "result", "seq": seq, "status": "ok",
-                    "sql": sql, "row_count": 0,
-                    "affected_rows": affected,
-                    "execution_time_ms": elapsed, "columns": [], "rows": [],
-                }))
-            }
-        }
+        let started = Instant::now();
+        let outcome = run_sqlx_statement(
+            &mut *conn,
+            &sql,
+            &SQLITE_QUERY,
+            timeout_secs,
+            max_rows,
+            started,
+            poste_exec::sql_values::sqlite_value_to_json,
+            |col| json!({ "name": col.name(), "type": col.type_info().name() }),
+        )
         .await;
-        let result = stmt.unwrap_or_else(|e| error_result(seq, &sql, &e, &stmt_start));
-        stdout
-            .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
-            .await?;
-        stdout.flush().await?;
+        let result = session_result_event(seq, &sql, outcome, &started);
+        emit(&mut stdout, &result).await?;
     }
 
     drop(conn);
@@ -205,19 +133,9 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
     Ok(())
 }
 
-/// Build a per-statement `status:"error"` result event for the session loop —
-/// statement failures must be events so the NDJSON session survives them.
-fn error_result(seq: u64, sql: &str, e: &anyhow::Error, started: &Instant) -> Value {
-    json!({
-        "type": "result", "seq": seq, "status": "error",
-        "sql": sql, "error": format!("{}", e),
-        "execution_time_ms": started.elapsed().as_millis() as u64,
-    })
-}
-
 async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64) -> Result<()> {
-    use sqlx::postgres::{PgPoolOptions, PgRow};
-    use sqlx::{Column, Row, TypeInfo};
+    use sqlx::postgres::PgPoolOptions;
+    use sqlx::TypeInfo;
 
     let pool = PgPoolOptions::new()
         .max_connections(2)
@@ -229,127 +147,36 @@ async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
     while let Some(line) = lines.next_line().await? {
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                let err = json!({"type":"result","seq":0,"status":"error","error":format!("JSON parse error: {}", e)});
-                stdout
-                    .write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes())
-                    .await?;
-                stdout.flush().await?;
+        let (seq, sql) = match parse_request(&line) {
+            Request::Run(seq, sql) => (seq, sql),
+            Request::Blank => continue,
+            Request::Malformed(msg) => {
+                let err = json!({"type":"result","seq":0,"status":"error","error":msg});
+                emit(&mut stdout, &err).await?;
                 continue;
             }
         };
-        let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-        let sql = req
-            .get("sql")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if sql.is_empty() {
-            continue;
-        }
 
-        let stmt_start = Instant::now();
-        let upper = poste_core::sql_parser::blank_string_literals(&sql).to_uppercase();
-        let is_query = upper.starts_with("SELECT")
-            || upper.starts_with("WITH")
-            || upper.starts_with("EXPLAIN")
-            || upper.starts_with("SHOW")
-            || upper.starts_with("TABLE ")
-            || upper.starts_with("VALUES")
-            || upper.contains("RETURNING");
-        // per-statement errors are events, never session-killers (see sqlite)
-        let stmt: anyhow::Result<Value> = async {
-            if is_query {
-                let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
-                let rows: Vec<PgRow> = if timeout_secs > 0 {
-                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
-                        .await
-                    {
-                        Ok(rows) => rows?,
-                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                    }
-                } else {
-                    fetch.await?
-                };
-                let elapsed = stmt_start.elapsed().as_millis() as u64;
-                let row_count = rows.len() as u64;
-                let truncated = max_rows > 0 && row_count > max_rows;
-                let display_rows = if max_rows > 0 {
-                    std::cmp::min(row_count, max_rows) as usize
-                } else {
-                    row_count as usize
-                };
-                let col_types: Vec<String> = rows
-                    .first()
-                    .map(|first_row| {
-                        first_row
-                            .columns()
-                            .iter()
-                            .map(|col| col.type_info().name().to_string())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let columns: Vec<Value> = rows
-                    .first()
-                    .map(|first_row| {
-                        first_row
-                            .columns()
-                            .iter()
-                            .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let json_rows: Vec<Vec<Value>> = rows
-                    .iter()
-                    .take(display_rows)
-                    .map(|row| {
-                        (0..row.len())
-                            .map(|i| pg_value_to_json(row, i, col_types.get(i).map_or("", |s| s)))
-                            .collect()
-                    })
-                    .collect();
-                Ok(json!({
-                    "type": "result", "seq": seq, "status": "ok",
-                    "sql": sql, "row_count": row_count,
-                    "affected_rows": null,
-                    "execution_time_ms": elapsed, "columns": columns,
-                    "rows": json_rows, "rows_truncated": truncated,
-                }))
-            } else {
-                let exec = sqlx::query(&sql).execute(&mut *conn);
-                let result = if timeout_secs > 0 {
-                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
-                        .await
-                    {
-                        Ok(result) => result?,
-                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                    }
-                } else {
-                    exec.await?
-                };
-                let affected = result.rows_affected();
-                let elapsed = stmt_start.elapsed().as_millis() as u64;
-                Ok(json!({
-                    "type": "result", "seq": seq, "status": "ok",
-                    "sql": sql, "row_count": 0,
-                    "affected_rows": affected,
-                    "execution_time_ms": elapsed, "columns": [], "rows": [],
-                }))
-            }
-        }
+        let started = Instant::now();
+        let outcome = run_sqlx_statement(
+            &mut *conn,
+            &sql,
+            &POSTGRES_QUERY,
+            timeout_secs,
+            max_rows,
+            started,
+            poste_exec::sql_values::pg_value_to_json,
+            |col| {
+                json!({
+                    "name": col.name(),
+                    "type": col.type_info().name(),
+                    "nullable": col.type_info().name() != "BOOL",
+                })
+            },
+        )
         .await;
-        let result = stmt.unwrap_or_else(|e| error_result(seq, &sql, &e, &stmt_start));
-        stdout
-            .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
-            .await?;
-        stdout.flush().await?;
+        let result = session_result_event(seq, &sql, outcome, &started);
+        emit(&mut stdout, &result).await?;
     }
 
     drop(conn);
@@ -358,8 +185,8 @@ async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64
 }
 
 async fn session_mysql(connection_url: &str, timeout_secs: u64, max_rows: u64) -> Result<()> {
-    use sqlx::mysql::{MySqlPoolOptions, MySqlRow};
-    use sqlx::{Column, Row, TypeInfo};
+    use sqlx::mysql::MySqlPoolOptions;
+    use sqlx::TypeInfo;
 
     let pool = MySqlPoolOptions::new()
         .max_connections(2)
@@ -371,129 +198,30 @@ async fn session_mysql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
     while let Some(line) = lines.next_line().await? {
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                let err = json!({"type":"result","seq":0,"status":"error","error":format!("JSON parse error: {}", e)});
-                stdout
-                    .write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes())
-                    .await?;
-                stdout.flush().await?;
+        let (seq, sql) = match parse_request(&line) {
+            Request::Run(seq, sql) => (seq, sql),
+            Request::Blank => continue,
+            Request::Malformed(msg) => {
+                let err = json!({"type":"result","seq":0,"status":"error","error":msg});
+                emit(&mut stdout, &err).await?;
                 continue;
             }
         };
-        let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-        let sql = req
-            .get("sql")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if sql.is_empty() {
-            continue;
-        }
 
-        let stmt_start = Instant::now();
-        let upper = poste_core::sql_parser::blank_string_literals(&sql).to_uppercase();
-        let is_query = upper.starts_with("SELECT")
-            || upper.starts_with("WITH")
-            || upper.starts_with("EXPLAIN")
-            || upper.starts_with("SHOW")
-            || upper.starts_with("DESCRIBE")
-            || upper.starts_with("DESC ")
-            || upper.contains("RETURNING");
-        // per-statement errors are events, never session-killers (see sqlite)
-        let stmt: anyhow::Result<Value> = async {
-            if is_query {
-                let fetch = sqlx::query(&sql).fetch_all(&mut *conn);
-                let rows: Vec<MySqlRow> = if timeout_secs > 0 {
-                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
-                        .await
-                    {
-                        Ok(rows) => rows?,
-                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                    }
-                } else {
-                    fetch.await?
-                };
-                let elapsed = stmt_start.elapsed().as_millis() as u64;
-                let row_count = rows.len() as u64;
-                let truncated = max_rows > 0 && row_count > max_rows;
-                let display_rows = if max_rows > 0 {
-                    std::cmp::min(row_count, max_rows) as usize
-                } else {
-                    row_count as usize
-                };
-                let col_types: Vec<String> = rows
-                    .first()
-                    .map(|first_row| {
-                        first_row
-                            .columns()
-                            .iter()
-                            .map(|col| col.type_info().name().to_string())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let columns: Vec<Value> = rows
-                    .first()
-                    .map(|first_row| {
-                        first_row
-                            .columns()
-                            .iter()
-                            .map(|col| json!({"name": col.name(), "type": col.type_info().name()}))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let json_rows: Vec<Vec<Value>> = rows
-                    .iter()
-                    .take(display_rows)
-                    .map(|row| {
-                        (0..row.len())
-                            .map(|i| {
-                                mysql_value_to_json(row, i, col_types.get(i).map_or("", |s| s))
-                            })
-                            .collect()
-                    })
-                    .collect();
-                Ok(json!({
-                    "type": "result", "seq": seq, "status": "ok",
-                    "sql": sql, "row_count": row_count,
-                    "affected_rows": null,
-                    "execution_time_ms": elapsed, "columns": columns,
-                    "rows": json_rows, "rows_truncated": truncated,
-                }))
-            } else {
-                let exec = sqlx::query(&sql).execute(&mut *conn);
-                let result = if timeout_secs > 0 {
-                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
-                        .await
-                    {
-                        Ok(result) => result?,
-                        Err(_) => anyhow::bail!("Query timed out after {} seconds", timeout_secs),
-                    }
-                } else {
-                    exec.await?
-                };
-                let affected = result.rows_affected();
-                let elapsed = stmt_start.elapsed().as_millis() as u64;
-                Ok(json!({
-                    "type": "result", "seq": seq, "status": "ok",
-                    "sql": sql, "row_count": 0,
-                    "affected_rows": affected,
-                    "execution_time_ms": elapsed, "columns": [], "rows": [],
-                }))
-            }
-        }
+        let started = Instant::now();
+        let outcome = run_sqlx_statement(
+            &mut *conn,
+            &sql,
+            &MYSQL_QUERY,
+            timeout_secs,
+            max_rows,
+            started,
+            poste_exec::sql_values::mysql_value_to_json,
+            |col| json!({ "name": col.name(), "type": col.type_info().name() }),
+        )
         .await;
-        let result = stmt.unwrap_or_else(|e| error_result(seq, &sql, &e, &stmt_start));
-        stdout
-            .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
-            .await?;
-        stdout.flush().await?;
+        let result = session_result_event(seq, &sql, outcome, &started);
+        emit(&mut stdout, &result).await?;
     }
 
     drop(conn);
@@ -511,82 +239,52 @@ async fn session_mssql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
     while let Some(line) = lines.next_line().await? {
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                let err = json!({"type":"result","seq":0,"status":"error","error":format!("JSON parse error: {}", e)});
-                stdout
-                    .write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes())
-                    .await?;
-                stdout.flush().await?;
+        let (seq, sql) = match parse_request(&line) {
+            Request::Run(seq, sql) => (seq, sql),
+            Request::Blank => continue,
+            Request::Malformed(msg) => {
+                let err = json!({"type":"result","seq":0,"status":"error","error":msg});
+                emit(&mut stdout, &err).await?;
                 continue;
             }
         };
-        let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-        let sql = req
-            .get("sql")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if sql.is_empty() {
-            continue;
-        }
 
-        let stmt_start = Instant::now();
+        let started = Instant::now();
         // Per-statement errors are reported as error results instead of
         // killing the session — a TDS session holds temp tables and
         // transactions, so surviving a bad statement matters more here.
-        let result = if mssql::is_query_stmt(&sql) {
-            match mssql::mssql_query(&mut client, &sql, timeout_secs).await {
-                Ok((columns, json_rows)) => {
-                    let elapsed = stmt_start.elapsed().as_millis() as u64;
-                    let row_count = json_rows.len() as u64;
-                    let truncated = max_rows > 0 && row_count > max_rows;
-                    let display_rows = if max_rows > 0 {
-                        std::cmp::min(row_count, max_rows) as usize
-                    } else {
-                        json_rows.len()
-                    };
-                    json!({
-                        "type": "result", "seq": seq, "status": "ok",
-                        "sql": sql, "row_count": row_count,
-                        "affected_rows": null,
-                        "execution_time_ms": elapsed, "columns": columns,
-                        "rows": json_rows.into_iter().take(display_rows).collect::<Vec<_>>(),
-                        "rows_truncated": truncated,
-                    })
-                }
-                Err(e) => json!({
-                    "type": "result", "seq": seq, "status": "error",
-                    "sql": sql, "error": format!("{}", e), "execution_time_ms": 0,
-                }),
-            }
+        // mssql_query/mssql_execute own their timeouts internally.
+        let outcome: anyhow::Result<StmtOutcome> = if mssql::is_query_stmt(&sql) {
+            mssql::mssql_query(&mut client, &sql, timeout_secs)
+                .await
+                .map(|(columns, all_rows)| {
+                    let row_count = all_rows.len() as u64;
+                    let (rows, truncated) = clamp_rows(all_rows, max_rows);
+                    StmtOutcome {
+                        columns,
+                        rows,
+                        row_count,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        truncated,
+                        is_dml: false,
+                        affected: 0,
+                    }
+                })
         } else {
-            match mssql::mssql_execute(&mut client, &sql, timeout_secs).await {
-                Ok(affected) => {
-                    let elapsed = stmt_start.elapsed().as_millis() as u64;
-                    json!({
-                        "type": "result", "seq": seq, "status": "ok",
-                        "sql": sql, "row_count": 0,
-                        "affected_rows": affected,
-                        "execution_time_ms": elapsed, "columns": [], "rows": [],
-                    })
-                }
-                Err(e) => json!({
-                    "type": "result", "seq": seq, "status": "error",
-                    "sql": sql, "error": format!("{}", e), "execution_time_ms": 0,
-                }),
-            }
+            mssql::mssql_execute(&mut client, &sql, timeout_secs)
+                .await
+                .map(|affected| StmtOutcome {
+                    columns: vec![],
+                    rows: vec![],
+                    row_count: 0,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    truncated: false,
+                    is_dml: true,
+                    affected,
+                })
         };
-        stdout
-            .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
-            .await?;
-        stdout.flush().await?;
+        let result = session_result_event(seq, &sql, outcome, &started);
+        emit(&mut stdout, &result).await?;
     }
 
     Ok(())
@@ -605,353 +303,79 @@ async fn session_clickhouse(connection_url: &str, timeout_secs: u64, max_rows: u
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
     while let Some(line) = lines.next_line().await? {
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                let err = json!({"type":"result","seq":0,"status":"error","error":format!("JSON parse error: {}", e)});
-                stdout
-                    .write_all(format!("{}\n", serde_json::to_string(&err)?).as_bytes())
-                    .await?;
-                stdout.flush().await?;
+        let (seq, sql) = match parse_request(&line) {
+            Request::Run(seq, sql) => (seq, sql),
+            Request::Blank => continue,
+            Request::Malformed(msg) => {
+                let err = json!({"type":"result","seq":0,"status":"error","error":msg});
+                emit(&mut stdout, &err).await?;
                 continue;
             }
         };
-        let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-        let sql = req
-            .get("sql")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if sql.is_empty() {
-            continue;
-        }
 
-        let stmt_start = Instant::now();
-        let result = match clickhouse::clickhouse_post(&client, &sql, timeout_secs).await {
-            Ok(ch) => {
-                let elapsed = stmt_start.elapsed().as_millis() as u64;
-                match ch.columns {
-                    Some(columns) => {
-                        let row_count = ch.rows.len() as u64;
-                        let truncated = max_rows > 0 && row_count > max_rows;
-                        let display_rows = if max_rows > 0 {
-                            std::cmp::min(row_count, max_rows) as usize
-                        } else {
-                            ch.rows.len()
-                        };
-                        json!({
-                            "type": "result", "seq": seq, "status": "ok",
-                            "sql": sql, "row_count": row_count,
-                            "affected_rows": null,
-                            "execution_time_ms": elapsed, "columns": columns,
-                            "rows": ch.rows.into_iter().take(display_rows).collect::<Vec<_>>(),
-                            "rows_truncated": truncated,
-                        })
+        let started = Instant::now();
+        // Query-vs-DML is decided by the response shape (columns = resultset).
+        let outcome: anyhow::Result<StmtOutcome> =
+            clickhouse::clickhouse_post(&client, &sql, timeout_secs)
+                .await
+                .map(|ch| {
+                    let elapsed = started.elapsed().as_millis() as u64;
+                    match ch.columns {
+                        Some(columns) => {
+                            let row_count = ch.rows.len() as u64;
+                            let (rows, truncated) = clamp_rows(ch.rows, max_rows);
+                            StmtOutcome {
+                                columns,
+                                rows,
+                                row_count,
+                                elapsed_ms: elapsed,
+                                truncated,
+                                is_dml: false,
+                                affected: 0,
+                            }
+                        }
+                        None => StmtOutcome {
+                            columns: vec![],
+                            rows: vec![],
+                            row_count: 0,
+                            elapsed_ms: elapsed,
+                            truncated: false,
+                            is_dml: true,
+                            affected: ch.written_rows,
+                        },
                     }
-                    None => json!({
-                        "type": "result", "seq": seq, "status": "ok",
-                        "sql": sql, "row_count": 0,
-                        "affected_rows": ch.written_rows,
-                        "execution_time_ms": elapsed, "columns": [], "rows": [],
-                    }),
-                }
-            }
-            Err(e) => json!({
-                "type": "result", "seq": seq, "status": "error",
-                "sql": sql, "error": format!("{}", e), "execution_time_ms": 0,
-            }),
-        };
-        stdout
-            .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())
-            .await?;
-        stdout.flush().await?;
+                });
+        let result = session_result_event(seq, &sql, outcome, &started);
+        emit(&mut stdout, &result).await?;
     }
 
     Ok(())
 }
 
-fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize, _col_type: &str) -> Value {
-    use sqlx::{Row, ValueRef};
-
-    if let Ok(raw) = row.try_get_raw(idx) {
-        if raw.is_null() {
-            return Value::Null;
-        }
-    }
-
-    if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
-            return parsed;
-        }
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) {
-        return json!(v);
-    }
-    Value::Null
+/// Outcome of parsing one stdin NDJSON request line.
+enum Request {
+    /// Serve this (seq, sql).
+    Run(u64, String),
+    /// Blank SQL: silently skipped, like the pre-consolidation loop.
+    Blank,
+    /// Malformed JSON: a seq-0 error event answers it and the loop continues.
+    Malformed(String),
 }
 
-fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str) -> Value {
-    use sqlx::{Row, ValueRef};
-
-    if let Ok(raw) = row.try_get_raw(idx) {
-        if raw.is_null() {
-            return Value::Null;
-        }
+fn parse_request(line: &str) -> Request {
+    let req: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => return Request::Malformed(format!("JSON parse error: {}", e)),
+    };
+    let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
+    let sql = req
+        .get("sql")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if sql.is_empty() {
+        return Request::Blank;
     }
-
-    let upper = col_type.to_uppercase();
-    match upper.as_str() {
-        "NUMERIC" => {
-            if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(idx) {
-                return match v.to_string().parse::<f64>() {
-                    Ok(n) if rust_decimal::Decimal::from_f64(n) == Some(v) => json!(n),
-                    _ => json!(v.to_string()),
-                };
-            }
-            return Value::Null;
-        }
-        "DATE" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx) {
-                return json!(v.format("%Y-%m-%d").to_string());
-            }
-        }
-        "TIMESTAMP" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
-                return json!(v.format("%Y-%m-%d %H:%M:%S%.3f").to_string());
-            }
-        }
-        "TIMESTAMPTZ" | "TIMESTAMP WITH TIME ZONE" => {
-            if let Ok(Some(v)) = row
-                .try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(idx)
-            {
-                let local = v.with_timezone(&chrono::Local);
-                return json!(local.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string());
-            }
-        }
-        "TIME" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx) {
-                return json!(v.format("%H:%M:%S%.3f").to_string());
-            }
-        }
-        "UUID" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::uuid::Uuid>, _>(idx) {
-                return json!(v.to_string());
-            }
-        }
-        "INET" | "CIDR" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::ipnetwork::IpNetwork>, _>(idx) {
-                return json!(v.to_string());
-            }
-        }
-        "JSON" | "JSONB" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::Json<Value>>, _>(idx) {
-                return v.0;
-            }
-            if let Ok(Some(s)) = row.try_get::<Option<String>, _>(idx) {
-                return serde_json::from_str(&s).unwrap_or(json!(s));
-            }
-            return Value::Null;
-        }
-        _ => {}
-    }
-
-    if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(idx) {
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<i16>, _>(idx) {
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
-        if upper == "INT8" || upper == "BIGINT" {
-            let max_safe: i64 = 9_007_199_254_740_992;
-            if v > -max_safe && v < max_safe {
-                return json!(v);
-            } else {
-                return json!(v.to_string());
-            }
-        }
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) {
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
-            return parsed;
-        }
-        if upper == "TIMESTAMPTZ" || upper == "TIMESTAMP WITH TIME ZONE" {
-            if let Ok(dt) = v.parse::<chrono::DateTime<chrono::Utc>>() {
-                let local = dt.with_timezone(&chrono::Local);
-                return json!(local.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
-            }
-            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&v, "%Y-%m-%d %H:%M:%S%.f") {
-                let utc = dt.and_utc();
-                let local = utc.with_timezone(&chrono::Local);
-                return json!(local.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
-            }
-        }
-        return json!(v);
-    }
-    Value::Null
-}
-
-/// Render raw bytes (BINARY/BLOB columns) as uppercase hex, matching
-/// MySQL's HEX() output for binary passes.
-fn mysql_binary_to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0F) as usize] as char);
-    }
-    out
-}
-
-fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col_type: &str) -> Value {
-    use sqlx::{Row, ValueRef};
-
-    if let Ok(raw) = row.try_get_raw(idx) {
-        if raw.is_null() {
-            return Value::Null;
-        }
-    }
-
-    let upper = col_type.to_uppercase();
-    match upper.as_str() {
-        "DECIMAL" | "DEC" | "NUMERIC" | "FIXED" => {
-            if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(idx) {
-                return match v.to_string().parse::<f64>() {
-                    Ok(n) if rust_decimal::Decimal::from_f64(n) == Some(v) => json!(n),
-                    _ => json!(v.to_string()),
-                };
-            }
-            return Value::Null;
-        }
-        "DATE" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx) {
-                return json!(v.format("%Y-%m-%d").to_string());
-            }
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
-                return json!(v.format("%Y-%m-%d").to_string());
-            }
-        }
-        "DATETIME" | "DATETIME2" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
-                return json!(v.format("%Y-%m-%d %H:%M:%S%.3f").to_string());
-            }
-        }
-        "TIMESTAMP" => {
-            if let Ok(Some(v)) = row
-                .try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(idx)
-            {
-                let local = v.with_timezone(&chrono::Local);
-                return json!(local.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string());
-            }
-        }
-        "TIME" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx) {
-                return json!(v.format("%H:%M:%S%.3f").to_string());
-            }
-        }
-        "JSON" => {
-            if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::Json<Value>>, _>(idx) {
-                return v.0;
-            }
-            if let Ok(Some(s)) = row.try_get::<Option<String>, _>(idx) {
-                return serde_json::from_str(&s).unwrap_or(json!(s));
-            }
-            if let Ok(Some(b)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
-                let s = String::from_utf8_lossy(&b);
-                return serde_json::from_str(&s).unwrap_or(json!(s.to_string()));
-            }
-            return Value::Null;
-        }
-        "BIGINT" => {
-            if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
-                let max_safe: i64 = 9_007_199_254_740_992;
-                if v > -max_safe && v < max_safe {
-                    return json!(v);
-                } else {
-                    return json!(v.to_string());
-                }
-            }
-        }
-        "BIGINT UNSIGNED" => {
-            if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(idx) {
-                return json!(v.to_string());
-            }
-        }
-        "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => {
-            if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
-                return json!(mysql_binary_to_hex(&v));
-            }
-            return Value::Null;
-        }
-        _ => {}
-    }
-
-    if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) {
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
-            return parsed;
-        }
-        if upper == "TIMESTAMP" || upper == "TIMESTAMP WITHOUT TIME ZONE" {
-            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&v, "%Y-%m-%d %H:%M:%S%.f") {
-                let utc = dt.and_utc();
-                let local = utc.with_timezone(&chrono::Local);
-                return json!(local.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
-            }
-        }
-        return json!(v);
-    }
-    if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
-        let s = String::from_utf8_lossy(&v);
-        if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&s) {
-            return parsed;
-        }
-        return json!(s.to_string());
-    }
-    Value::Null
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_mysql_binary_to_hex() {
-        assert_eq!(mysql_binary_to_hex(b""), "");
-        assert_eq!(mysql_binary_to_hex(&[0x00, 0x0F, 0xA1]), "000FA1");
-        assert_eq!(
-            mysql_binary_to_hex(b"Hello, BINARY!"),
-            "48656C6C6F2C2042494E41525921"
-        );
-        assert_eq!(
-            mysql_binary_to_hex(&[0xFF, 0x00, 0x10, 0x1F, 0xA5, 0x5A]),
-            "FF00101FA55A"
-        );
-    }
+    Request::Run(seq, sql)
 }
