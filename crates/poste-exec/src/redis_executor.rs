@@ -205,7 +205,19 @@ pub fn redis_value_to_json(
             match std::str::from_utf8(b) {
                 Ok(s) => {
                     let truncated = total > max_bytes;
-                    let shown = if truncated { &s[..max_bytes] } else { s };
+                    // Slice on a CHAR boundary: `&s[..max_bytes]` panics when
+                    // the cut lands inside a multibyte character (a CJK/emoji
+                    // value whose max_bytes-th byte continues a sequence
+                    // crashes the whole redis-exec/session process).
+                    let shown: &str = if truncated {
+                        let mut end = max_bytes;
+                        while end > 0 && !s.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        &s[..end]
+                    } else {
+                        s
+                    };
                     let mut obj = json!({
                         "type": "string",
                         "value": shown,
@@ -276,7 +288,11 @@ pub fn redis_value_to_json(
 
             let inferred_type = match upper_cmd.as_str() {
                 "HGETALL" => "hash",
-                "LRANGE" | "LINDEX" | "LPOP" | "RPOP" => "list",
+                // MGET/HMGET reply with one value per requested key/field — a
+                // flat string array the even-count heuristic below would
+                // misread as field-value pairs (MGET a b rendered as the hash
+                // {a: <value of a>})
+                "LRANGE" | "LINDEX" | "LPOP" | "RPOP" | "MGET" | "HMGET" => "list",
                 "SMEMBERS" | "SINTER" | "SUNION" | "SDIFF" | "SRANDMEMBER" => "set",
                 "ZRANGE" | "ZREVRANGE" | "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZPOPMIN"
                 | "ZPOPMAX" => "zset",
@@ -444,6 +460,28 @@ mod tests {
     }
 
     #[test]
+    fn bulk_string_truncation_respects_char_boundaries() {
+        // regression: the cut used to be `&s[..max_bytes]`, which panics when
+        // max_bytes lands inside a multibyte character — a CJK value 64 bytes
+        // in would crash the whole redis-exec/session process
+        // regression: the cut used to be `&s[..max_bytes]`, which panics when
+        // max_bytes lands inside a multibyte character — a CJK value whose
+        // 64th byte continues a sequence would crash the whole
+        // redis-exec/session process. 22 CJK chars = 66 bytes; the cut at 64
+        // lands on the 2nd byte of the 22nd char → floors to 63 (21 chars).
+        let raw = "漢".repeat(22).into_bytes(); // 66 bytes
+        let out = redis_value_to_json(&redis::Value::BulkString(raw.clone()), "GET", 100, 64);
+        assert_eq!(out["truncated"], json!(true));
+        assert_eq!(out["len"], 66);
+        let shown = out["value"].as_str().unwrap();
+        assert_eq!(shown.len(), 63);
+        assert!(shown.chars().count() == 21);
+        // pure multibyte value, cut one byte into a char: floors to a boundary
+        let out2 = redis_value_to_json(&redis::Value::BulkString("漢漢漢".into()), "GET", 100, 7);
+        assert_eq!(out2["value"].as_str().unwrap().len(), 6);
+    }
+
+    #[test]
     fn non_utf8_becomes_binary() {
         let out = redis_value_to_json(
             &redis::Value::BulkString(vec![0x48, 0x65, 0xff, 0x00]),
@@ -531,6 +569,27 @@ mod tests {
         assert_eq!(out["len"], 10);
         assert_eq!(out["truncated"], json!(true));
         assert_eq!(out["value"].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn mget_stays_list_despite_even_string_count() {
+        // MGET a b replies [1, 2] — flat strings, even count: the heuristic
+        // must not read it as the hash {a: 1}; the values would render as
+        // "keys" in the panel grid
+        let arr = vec![
+            redis::Value::BulkString(b"1".to_vec()),
+            redis::Value::BulkString(b"2".to_vec()),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "MGET", 100, 1024);
+        assert_eq!(out["type"], "list");
+        assert_eq!(out["value"], json!(["1", "2"]));
+
+        let arr2 = vec![
+            redis::Value::BulkString(b"v1".to_vec()),
+            redis::Value::BulkString(b"v2".to_vec()),
+        ];
+        let out2 = redis_value_to_json(&redis::Value::Array(arr2), "HMGET", 100, 1024);
+        assert_eq!(out2["type"], "list");
     }
 
     #[test]
