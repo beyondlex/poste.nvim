@@ -462,9 +462,6 @@ mod tests {
     #[test]
     fn bulk_string_truncation_respects_char_boundaries() {
         // regression: the cut used to be `&s[..max_bytes]`, which panics when
-        // max_bytes lands inside a multibyte character — a CJK value 64 bytes
-        // in would crash the whole redis-exec/session process
-        // regression: the cut used to be `&s[..max_bytes]`, which panics when
         // max_bytes lands inside a multibyte character — a CJK value whose
         // 64th byte continues a sequence would crash the whole
         // redis-exec/session process. 22 CJK chars = 66 bytes; the cut at 64
