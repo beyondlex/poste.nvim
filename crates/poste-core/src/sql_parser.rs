@@ -122,9 +122,13 @@ pub fn split_statements(body: &str) -> Vec<String> {
             // Line comment: -- ...
             '-' if chars.peek() == Some(&'-') => {
                 chars.next(); // consume second -
-                              // Consume until end of line (skip, not part of any statement)
+                              // Consume to end of line, but KEEP the newline in
+                              // the statement text: swallowing it glues the
+                              // token before the comment to the token after it
+                              // (`SELECT 1--c\nFROM t` → `SELECT 1FROM t`).
                 for ch in chars.by_ref() {
                     if ch == '\n' {
+                        current.push(ch);
                         break;
                     }
                 }
@@ -406,6 +410,15 @@ mod tests {
     fn test_split_line_comment() {
         let stmts = split_statements("SELECT 1; -- comment with ; inside\nSELECT 2;");
         assert_eq!(stmts, vec!["SELECT 1", "SELECT 2"]);
+    }
+
+    #[test]
+    fn test_split_line_comment_keeps_newline_as_separator() {
+        // regression: the comment consumer ate the newline, so a comment with
+        // no space before it glued the surrounding tokens together —
+        // `SELECT 1--c\nFROM t` split into `SELECT 1FROM t` (syntax error)
+        let stmts = split_statements("SELECT 1--c\nFROM t;");
+        assert_eq!(stmts, vec!["SELECT 1\nFROM t"]);
     }
 
     #[test]
