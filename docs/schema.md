@@ -138,11 +138,14 @@ table/column/index queries are schema-scoped (PG search path honored).
 
 ```
 poste context detect <offset> [--dialect generic|postgres|mysql|sqlite]
-poste context stmt   ...   # statement boundaries around a cursor line
+poste context stmt   <offset> # statement boundaries around a cursor line
+poste context stmt-ranges     # ALL statement boundary line ranges in the text
 ```
 
 Pure text analysis: reads SQL text on stdin, answers completion-context /
-statement-boundary questions for the given 0-based byte `offset`.
+statement-boundary questions for the given 0-based byte `offset`. `stmt`
+returns `{start_line, end_line}` (0-based); `stmt-ranges` returns
+`[[start, end], ...]` pairs covering every statement in the text.
 
 ### `connection` — connections.toml inspection helpers
 
