@@ -85,6 +85,8 @@ pub async fn execute(action: ConnectionAction) -> Result<()> {
                         "postgres" => "🐘",
                         "mysql" => "🐬",
                         "sqlite" => "📦",
+                        "mssql" => "🟦",
+                        "clickhouse" => "🟨",
                         _ => "❓",
                     };
 
