@@ -53,7 +53,9 @@ pub(super) async fn introspect_sqlite(params: &IntrospectParams) -> Result<Value
             let rows = sqlx::query(&sql).fetch_all(&pool).await?;
             let fk_pragma = format!(
                 "SELECT \"from\", \"table\", \"to\" FROM pragma_foreign_key_list('{}')",
-                table
+                // pragma args cannot be bound as parameters — double the
+                // single quotes so a quote in the table name stays a literal
+                table.replace('\'', "''")
             );
             let fk_rows = sqlx::query(&fk_pragma)
                 .fetch_all(&pool)

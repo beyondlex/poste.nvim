@@ -62,7 +62,11 @@ pub(super) async fn introspect_mysql(params: &IntrospectParams) -> Result<Value>
             let table = params.table.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("table parameter required for columns introspection")
             })?;
-            let sql = dialect.list_columns().replace("{}", table);
+            // The template interpolates inside backticks — a backtick in the
+            // table name must be doubled or the query breaks (same escaping
+            // the inline() helper applies for clickhouse).
+            let table = table.replace('`', "``");
+            let sql = dialect.list_columns().replace("{}", &table);
             let rows = sqlx::query(&sql).fetch_all(&pool).await?;
             let fk_sql = format!(
                 "SELECT kcu.COLUMN_NAME AS col, kcu.REFERENCED_TABLE_NAME AS ref_table, \
@@ -103,7 +107,10 @@ pub(super) async fn introspect_mysql(params: &IntrospectParams) -> Result<Value>
             let table = params.table.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("table parameter required for indexes introspection")
             })?;
-            let sql = dialect.list_indexes().replace("{}", table);
+            // backtick-doubling: see the Columns branch
+            let sql = dialect
+                .list_indexes()
+                .replace("{}", &table.replace('`', "``"));
             let rows = sqlx::query(&sql).fetch_all(&pool).await?;
             use std::collections::BTreeMap;
             let mut index_map: BTreeMap<String, (Vec<String>, bool)> = BTreeMap::new();
