@@ -442,9 +442,12 @@ impl Parser {
     }
 
     /// Strip surrounding double or single quotes from a string value.
+    /// The `len() >= 2` guard keeps a bare quote character (`@v = "`) from
+    /// slicing `1..0` — same guard as the `.env` reader in poste-cli's util.
     fn strip_quotes(value: &mut String) {
-        if (value.starts_with('"') && value.ends_with('"'))
-            || (value.starts_with('\'') && value.ends_with('\''))
+        if value.len() >= 2
+            && ((value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\'')))
         {
             *value = value[1..value.len() - 1].to_string();
         }
@@ -666,6 +669,21 @@ mod tests {
         assert_eq!(parser.parse_variable_line("GET https://example.com"), None);
         assert_eq!(parser.parse_variable_line("# comment"), None);
         assert_eq!(parser.parse_variable_line("@host"), None);
+    }
+
+    #[test]
+    fn test_parse_variable_line_bare_quote_does_not_panic() {
+        // Regression: a lone quote character satisfied both starts_with and
+        // ends_with, so strip_quotes sliced `1..0` and panicked the CLI.
+        let parser = Parser::new(HashMap::new());
+        assert_eq!(
+            parser.parse_variable_line("@v = \""),
+            Some(("v".to_string(), "\"".to_string()))
+        );
+        assert_eq!(
+            parser.parse_variable_line("@v = '"),
+            Some(("v".to_string(), "'".to_string()))
+        );
     }
 
     #[test]
