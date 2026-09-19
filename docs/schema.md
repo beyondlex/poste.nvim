@@ -155,7 +155,11 @@ poste connection list [--path DIR] [--env NAME] [--json]
 
 Lists resolved connections (name → URL with `{{var}}` expansion applied).
 Siblings primarily resolve names themselves; this subcommand is a
-debug/parity helper against the Rust resolver.
+debug/parity helper against the Rust resolver. The Rust store reads
+`connections.toml` (walking up from `--path`, same discovery as the
+siblings — TOML wins when a directory carries both files) with a legacy
+`connections.json` fallback; `poste connection test <name>` resolves
+through the same store.
 
 ## Stability discipline
 
