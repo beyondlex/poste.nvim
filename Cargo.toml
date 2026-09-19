@@ -22,6 +22,9 @@ poste-exec = { path = "crates/poste-exec", version = "0.1.0" }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "io-std", "io-util"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# connections.toml parsing for `ConnectionStore` — the documented (and
+# sibling-shared) connection format; connections.json stays a legacy fallback
+toml = "0.9"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 regex = "1"

@@ -20,6 +20,8 @@ chrono = "0.4"
 sqlx.workspace = true
 rust_decimal.workspace = true
 percent-encoding = "2"
+# connections.toml (the documented format) — ConnectionStore parity with Lua
+toml.workspace = true
 
 # SQL Server (TDS; first non-sqlx driver)
 tiberius.workspace = true
@@ -34,3 +36,6 @@ redis = { version = "0.27", features = ["tokio-comp"] }
 # AMQP (RabbitMQ)
 lapin.workspace = true
 futures.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

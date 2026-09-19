@@ -1,7 +1,9 @@
 //! SQL connection configuration management.
 //!
-//! Connections are stored in `connections.json` files, discovered by walking
-//! up the directory tree from the SQL file's location (same as env.json).
+//! Connections live in `connections.toml` (the documented, sibling-shared
+//! format, discovered by walking up the directory tree from the SQL file's
+//! location — same discovery the Lua plugins run) with a legacy
+//! `connections.json` fallback.
 
 use anyhow::Result;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
@@ -228,15 +230,22 @@ impl ConnectionStore {
         }
     }
 
-    /// Load connections.json by walking up from `search_dir`.
+    /// Load the connection store walking up from `search_dir`. Reads the
+    /// documented `connections.toml` (the same file the sibling plugins
+    /// resolve — the mirror-implementation contract in docs/schema.md) and
+    /// falls back to a legacy `connections.json` when no TOML exists.
     pub fn load(search_dir: &Path) -> Result<Self> {
-        let config_path = find_connections_json(search_dir);
+        let config_path = find_connections_file(search_dir);
 
         match config_path {
             Some(path) => {
                 let content = std::fs::read_to_string(&path)?;
-                let mut connections: HashMap<String, ConnectionConfig> =
-                    serde_json::from_str(&content)?;
+                let is_toml = path.extension().and_then(|e| e.to_str()) == Some("toml");
+                let mut connections: HashMap<String, ConnectionConfig> = if is_toml {
+                    connections_from_toml(&content)?
+                } else {
+                    serde_json::from_str(&content)?
+                };
                 // Normalize dialect aliases (postgresql → postgres,
                 // mariadb → mysql, …) — mirror of the Lua resolver
                 for conn in connections.values_mut() {
@@ -275,7 +284,7 @@ impl ConnectionStore {
     /// Returns the connection URL string.
     pub fn resolve(&self, name: &str, env_vars: &HashMap<String, String>) -> Result<String> {
         let config = self.connections.get(name).ok_or_else(|| {
-            anyhow::anyhow!("Connection '{}' not found in connections.json", name)
+            anyhow::anyhow!("Connection '{}' not found in the connection store", name)
         })?;
 
         // Clone and substitute variables in all string fields
@@ -320,18 +329,66 @@ impl ConnectionStore {
     }
 }
 
-/// Find connections.json by walking up from search_dir.
-fn find_connections_json(search_dir: &Path) -> Option<PathBuf> {
+/// Find the connection store file walking up from search_dir. `connections.toml`
+/// is the documented, sibling-shared format and wins when a directory carries
+/// both; `connections.json` remains a legacy fallback.
+fn find_connections_file(search_dir: &Path) -> Option<PathBuf> {
+    const NAMES: [&str; 2] = ["connections.toml", "connections.json"];
     let mut dir = search_dir.to_path_buf();
     loop {
-        let candidate = dir.join("connections.json");
-        if candidate.is_file() {
-            return Some(candidate);
+        for name in NAMES {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
         if !dir.pop() {
             return None;
         }
     }
+}
+
+/// Parse `connections.toml` into the store map. Field extraction is
+/// deliberately tolerant — the same tolerance the Lua resolver applies:
+/// top-level scalars (`description = "…"` above the first section) and
+/// non-connection tables (satellite sections, a `tunnel` sub-table) are
+/// ignored, `port` accepts both integer and string, and a missing `dialect`
+/// defaults to `postgres` (Lua's `is_sql_dialect(nil) == true` rule).
+fn connections_from_toml(content: &str) -> Result<HashMap<String, ConnectionConfig>> {
+    let root: toml::Value = toml::from_str(content)
+        .map_err(|e| anyhow::anyhow!("connections.toml parse error: {}", e))?;
+    let Some(root_table) = root.as_table() else {
+        return Ok(HashMap::new());
+    };
+    let mut connections = HashMap::new();
+    for (name, entry) in root_table {
+        let Some(table) = entry.as_table() else {
+            continue; // top-level scalar — not a connection
+        };
+        let string_field = |key: &str| -> Option<String> {
+            table.get(key).and_then(|v| v.as_str()).map(String::from)
+        };
+        let port = table.get("port").and_then(|v| match v {
+            toml::Value::Integer(n) => u16::try_from(*n).ok(),
+            toml::Value::String(s) => s.trim().parse::<u16>().ok(),
+            _ => None,
+        });
+        let config = ConnectionConfig {
+            // Missing dialect behaves like postgres, mirroring the Lua
+            // resolver's nil-dialect default.
+            dialect: string_field("dialect").unwrap_or_else(|| "postgres".to_string()),
+            host: string_field("host"),
+            port,
+            database: string_field("database"),
+            user: string_field("user"),
+            password: string_field("password"),
+            path: string_field("path"),
+            ssl_mode: string_field("ssl_mode"),
+            extra_params: HashMap::new(),
+        };
+        connections.insert(name.clone(), config);
+    }
+    Ok(connections)
 }
 
 /// Test a connection by attempting to connect.
@@ -579,13 +636,12 @@ mod tests {
     }
 
     #[test]
-    fn test_find_connections_json() {
-        // Create a temp directory structure
-        let temp_dir = std::env::temp_dir().join("poste_test_connections");
-        let sub_dir = temp_dir.join("sub").join("deep");
+    fn test_find_connections_file_walks_up() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sub_dir = temp_dir.path().join("sub").join("deep");
         std::fs::create_dir_all(&sub_dir).unwrap();
 
-        let config_path = temp_dir.join("connections.json");
+        let config_path = temp_dir.path().join("connections.json");
         std::fs::write(
             &config_path,
             r#"{"test": {"dialect": "sqlite", "path": "test.db"}}"#,
@@ -593,12 +649,8 @@ mod tests {
         .unwrap();
 
         // Search from deep subdirectory should find it
-        let found = find_connections_json(&sub_dir);
-        assert!(found.is_some());
+        let found = find_connections_file(&sub_dir);
         assert_eq!(found.unwrap(), config_path);
-
-        // Cleanup
-        std::fs::remove_dir_all(&temp_dir).ok();
     }
 
     #[test]
@@ -772,5 +824,132 @@ mod tests {
             extra_params: HashMap::new(),
         };
         assert_eq!(config.to_url(), "postgres://localhost:5432/my%20db%2Fprod");
+    }
+
+    // ---- connections.toml store (the documented sibling-shared format) ----
+
+    fn write_toml(dir: &Path, content: &str) {
+        std::fs::write(dir.join("connections.toml"), content).unwrap();
+    }
+
+    #[test]
+    fn store_loads_toml_and_resolves_the_same_urls_as_lua() {
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(
+            dir.path(),
+            r#"
+description = "shared connections file"
+
+[primary]
+dialect = "postgres"
+host = "db.internal"
+port = 5432
+database = "prod"
+user = "alice"
+password = "p@ss"
+
+[audit]
+dialect = "mariadb"
+host = "db1"
+database = "web"
+
+[files]
+dialect = "sqlite"
+path = "./data/app.db"
+
+[tunnelled]
+dialect = "postgres"
+host = "10.0.0.5"
+port = "5433"
+database = "t"
+tunnel = { jump = "bastion", remote_port = 5432 }
+"#,
+        );
+        let store = ConnectionStore::load(dir.path()).unwrap();
+
+        // mariadb normalizes to mysql, tunnel sub-table ignored, string port parsed
+        assert_eq!(store.names().len(), 4);
+        let primary = store.resolve("primary", &Default::default()).unwrap();
+        assert_eq!(primary, "postgres://alice:p%40ss@db.internal:5432/prod");
+        let audit = store.resolve("audit", &Default::default()).unwrap();
+        assert_eq!(audit, "mysql://db1:3306/web");
+        let files = store.resolve("files", &Default::default()).unwrap();
+        assert_eq!(files, "sqlite:./data/app.db?mode=rwc");
+        let tunnelled = store.resolve("tunnelled", &Default::default()).unwrap();
+        assert_eq!(tunnelled, "postgres://10.0.0.5:5433/t");
+        assert_eq!(
+            store.source_path().unwrap().file_name().unwrap(),
+            "connections.toml"
+        );
+    }
+
+    #[test]
+    fn store_toml_missing_dialect_defaults_to_postgres() {
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(
+            dir.path(),
+            r#"
+[legacy]
+host = "old-db"
+database = "main"
+"#,
+        );
+        let store = ConnectionStore::load(dir.path()).unwrap();
+        assert_eq!(
+            store.resolve("legacy", &Default::default()).unwrap(),
+            "postgres://old-db:5432/main"
+        );
+    }
+
+    #[test]
+    fn store_prefers_toml_over_legacy_json_in_the_same_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(
+            dir.path(),
+            r#"
+[a]
+dialect = "postgres"
+host = "toml-host"
+"#,
+        );
+        std::fs::write(
+            dir.path().join("connections.json"),
+            r#"{"a": {"dialect": "postgres", "host": "json-host"}}"#,
+        )
+        .unwrap();
+        let store = ConnectionStore::load(dir.path()).unwrap();
+        assert_eq!(
+            store.resolve("a", &Default::default()).unwrap(),
+            "postgres://toml-host:5432/"
+        );
+    }
+
+    #[test]
+    fn store_json_still_loads_when_no_toml_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("connections.json"),
+            r#"{"b": {"dialect": "mysql", "host": "h", "port": 3307}}"#,
+        )
+        .unwrap();
+        let store = ConnectionStore::load(dir.path()).unwrap();
+        assert_eq!(
+            store.resolve("b", &Default::default()).unwrap(),
+            "mysql://h:3307/"
+        );
+    }
+
+    #[test]
+    fn store_broken_toml_is_an_error_not_silence() {
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(
+            dir.path(),
+            "[a
+host = ",
+        );
+        let err = ConnectionStore::load(dir.path())
+            .err()
+            .expect("broken toml must fail");
+        assert!(format!("{}", err).contains("connections.toml parse error"));
     }
 }
