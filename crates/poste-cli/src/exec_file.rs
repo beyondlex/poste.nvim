@@ -99,10 +99,14 @@ where
     // Filter out USE statements: they are silently skipped during execution
     // (the database is already set via --database or connection URL). Removing
     // them here keeps `total` and seq numbering consistent — no gaps, no stuck
-    // progress bar.
+    // progress bar. The predicate is the same one the exec loops skip on
+    // (`is_skippable`), so the two can never disagree about what a USE is.
     let statements: Vec<String> = all_statements
         .iter()
-        .filter(|s| !s.trim().is_empty() && !s.trim().to_uppercase().starts_with("USE "))
+        .filter(|s| {
+            let t = s.trim();
+            !t.is_empty() && !poste_core::sql_parser::is_use_statement(t)
+        })
         .cloned()
         .collect();
 
@@ -194,7 +198,7 @@ fn extract_connection_directive(content: &str) -> Option<String> {
 
 fn extract_database_from_url(url: &str) -> Option<String> {
     // postgres://user:pass@host:5432/dbname → Some("dbname")
-    // mysql://user:pass@host:3306/dbname → Some("dbname")
+    // mysql://user:pass@host:3306/dbname?sslmode=require → Some("dbname")
     // sqlite::memory: → None
     // sqlite:/path/to/db.sqlite → extract filename without extension
     if let Some(rest) = url.strip_prefix("sqlite:") {
@@ -212,6 +216,13 @@ fn extract_database_from_url(url: &str) -> Option<String> {
         let after_scheme = &url[scheme_end + 3..];
         if let Some(last_slash) = after_scheme.rfind('/') {
             let db = after_scheme[last_slash + 1..].to_string();
+            // Drop a query string / fragment: ?sslmode=require is connection
+            // config, not part of the name (replace_database_in_url makes
+            // the same split when --database swaps the path segment).
+            let db = match db.find(['?', '#']) {
+                Some(i) => db[..i].to_string(),
+                None => db,
+            };
             if !db.is_empty() {
                 return Some(db);
             }
@@ -875,6 +886,33 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_extract_database_from_url() {
+        assert_eq!(
+            extract_database_from_url("postgres://u:p@host:5432/dbname"),
+            Some("dbname".to_string())
+        );
+        // query strings and fragments are connection config, not the name
+        assert_eq!(
+            extract_database_from_url("postgres://u:p@host:5432/dbname?sslmode=require"),
+            Some("dbname".to_string())
+        );
+        assert_eq!(
+            extract_database_from_url("mysql://host/dbname#frag"),
+            Some("dbname".to_string())
+        );
+        assert_eq!(
+            extract_database_from_url("postgres://host:5432"),
+            None,
+            "no path db"
+        );
+        assert_eq!(extract_database_from_url("sqlite::memory:"), None);
+        assert_eq!(
+            extract_database_from_url("sqlite:/path/to/db.sqlite"),
+            Some("db".to_string())
+        );
+    }
 
     fn collect_events(args: &ExecFileArgs) -> Vec<serde_json::Value> {
         let events = std::sync::Mutex::new(Vec::new());
