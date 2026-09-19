@@ -306,6 +306,52 @@ pub fn blank_string_literals(stmt: &str) -> String {
     out.into_iter().collect()
 }
 
+/// A copy of `stmt` with string literals blanked (see `blank_string_literals`)
+/// and comments removed, for keyword-heuristic classification.
+///
+/// Classification asks "does the *code* start with SELECT / contain
+/// RETURNING?" — but a leading `/* hint */` hides the keyword from a prefix
+/// match (a hinted `/*+ SeqScan(t) */ SELECT` used to fall through to the
+/// execute path and lose its rows), and the word "returning" inside a
+/// comment flipped a DML statement onto the fetch path. Line comments keep
+/// their newline and each block comment collapses to one space — a comment
+/// is whitespace in SQL, so tokens stay separated the way the server sees
+/// them. Applied after `blank_string_literals`, so `/*` or `--` inside a
+/// literal cannot open a fake comment.
+pub fn blank_literals_and_comments(stmt: &str) -> String {
+    let blanked = blank_string_literals(stmt);
+    let mut out = String::with_capacity(blanked.len());
+    let mut chars = blanked.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '-' if chars.peek() == Some(&'-') => {
+                chars.next();
+                // Keep the newline so the tokens before and after the
+                // comment stay separated (same rule as split_statements).
+                for ch in chars.by_ref() {
+                    if ch == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                out.push(' ');
+                // Consume through `*/`; an unterminated comment eats the rest.
+                while let Some(ch) = chars.next() {
+                    if ch == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Parse a TEXT/BLOB cell as JSON only when it is *structurally* JSON.
 ///
 /// Returns `Some(parsed)` for values starting with `{` or `[`, else `None`.
@@ -326,22 +372,28 @@ pub fn parse_json_cell(text: &str) -> Option<serde_json::Value> {
 /// Returns the database name if so.
 pub fn detect_use_statement(stmt: &str) -> Option<String> {
     let trimmed = stmt.trim();
-    let upper = trimmed.to_uppercase();
-    if upper.starts_with("USE ") {
-        // slice the ORIGINAL, defensively: to_uppercase can change byte
-        // lengths (ſ → SS, ß → SS), so `upper` starting with "USE " does not
-        // prove byte 4 of `trimmed` is a char boundary — `trimmed[4..]` could
-        // panic on exotic input ("uſe db")
-        let rest = trimmed.get(4..)?.trim();
-        // Strip trailing semicolon if present
-        let db = rest.trim_end_matches(';').trim();
-        // Strip quotes if present
-        let db = db.trim_matches('`').trim_matches('"').trim_matches('\'');
-        if !db.is_empty() {
-            return Some(db.to_string());
-        }
+    // First whitespace-delimited token must be USE (case-insensitive). A
+    // token check instead of a `"USE "` prefix match also accepts tab- or
+    // newline-separated forms (`USE\tmydb`) while still rejecting `USELESS`.
+    let token_end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    if trimmed[..token_end].to_uppercase() != "USE" {
+        return None;
+    }
+    let rest = trimmed[token_end..].trim();
+    // Strip trailing semicolon if present
+    let db = rest.trim_end_matches(';').trim();
+    // Strip quotes if present
+    let db = db.trim_matches('`').trim_matches('"').trim_matches('\'');
+    if !db.is_empty() {
+        return Some(db.to_string());
     }
     None
+}
+
+/// True when `stmt` is a USE statement — the shared skip predicate for the
+/// exec loops (the database is fixed by the connection URL / `--database`).
+pub fn is_use_statement(stmt: &str) -> bool {
+    detect_use_statement(stmt).is_some()
 }
 
 #[cfg(test)]
@@ -476,12 +528,93 @@ mod tests {
             detect_use_statement("USE \"mydb\""),
             Some("mydb".to_string())
         );
+        // any whitespace after USE separates the token, not just a space
+        assert_eq!(detect_use_statement("USE\tmydb"), Some("mydb".to_string()));
+        assert_eq!(detect_use_statement("USE\nmydb"), Some("mydb".to_string()));
         assert_eq!(detect_use_statement("SELECT 1"), None);
         assert_eq!(detect_use_statement("USELESS"), None);
-        // exotic case-folding: ſ uppercases to SS, so the uppercased prefix
-        // and the original's byte offsets disagree — slicing the original at
-        // byte 4 must stay panic-free regardless of where the boundary lands
+        // exotic case-folding: ſ uppercases to SS, so the token comparison
+        // must run on the token itself, never slice a byte offset derived
+        // from the uppercased form
         assert_eq!(detect_use_statement("uſe db"), Some("db".to_string()));
+    }
+
+    #[test]
+    fn test_is_use_statement() {
+        assert!(is_use_statement("USE mydb"));
+        assert!(is_use_statement("use\tmydb"));
+        assert!(is_use_statement("  USE mydb  "));
+        assert!(!is_use_statement("SELECT * FROM use_table"));
+        assert!(!is_use_statement("USELESS"));
+        assert!(!is_use_statement(""));
+    }
+
+    // ---- blank_literals_and_comments (classification view) ----
+
+    #[test]
+    fn test_blank_comments_leading_block_comment_exposes_keyword() {
+        // The bug this helper exists for: a leading hint comment hid SELECT
+        // from the prefix match and the statement was executed as DML.
+        assert!(blank_literals_and_comments("/*+ SeqScan(t) */ SELECT 1")
+            .trim()
+            .starts_with("SELECT"));
+        assert!(blank_literals_and_comments("-- header\nSELECT 1")
+            .trim()
+            .starts_with("SELECT"));
+    }
+
+    #[test]
+    fn test_blank_comments_returning_in_comment_not_matched() {
+        // "returning" inside a comment must not flip DML onto the fetch path.
+        assert!(!blank_literals_and_comments(
+            "UPDATE t SET a = 1 /* returning to baseline */ WHERE id = 1"
+        )
+        .to_uppercase()
+        .contains("RETURNING"));
+        assert!(!blank_literals_and_comments(
+            "UPDATE t SET a = 1 -- returning to baseline\nWHERE id = 1"
+        )
+        .to_uppercase()
+        .contains("RETURNING"));
+        // A real RETURNING clause after a comment is still seen.
+        assert!(
+            blank_literals_and_comments("UPDATE t SET a = 1 /* note */ RETURNING id")
+                .to_uppercase()
+                .contains("RETURNING")
+        );
+    }
+
+    #[test]
+    fn test_blank_comments_tokens_stay_separated() {
+        // A comment is whitespace: `SELECT/*x*/1` must not glue to SELECT1.
+        assert_eq!(blank_literals_and_comments("SELECT/*x*/1"), "SELECT 1");
+        // Line comment keeps its newline (same rule as split_statements).
+        assert_eq!(
+            blank_literals_and_comments("SELECT 1--c\nFROM t"),
+            "SELECT 1\nFROM t"
+        );
+    }
+
+    #[test]
+    fn test_blank_comments_literals_are_not_comments() {
+        // `/*` and `--` inside a literal never open a fake comment (the
+        // literal was already blanked before the comment pass runs).
+        assert_eq!(
+            blank_literals_and_comments("SELECT 'a--b' FROM t"),
+            "SELECT        FROM t"
+        );
+        assert_eq!(
+            blank_literals_and_comments("SELECT 'a/*b' FROM t"),
+            "SELECT        FROM t"
+        );
+    }
+
+    #[test]
+    fn test_blank_comments_unterminated() {
+        // Unterminated block comment eats the rest; unterminated line comment
+        // ends at end of input. No panic either way.
+        assert_eq!(blank_literals_and_comments("SELECT /* x"), "SELECT  ");
+        assert_eq!(blank_literals_and_comments("SELECT -- x"), "SELECT ");
     }
 
     // ---- blank_string_literals (keyword-heuristic view) ----
