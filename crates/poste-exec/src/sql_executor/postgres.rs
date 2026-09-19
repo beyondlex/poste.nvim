@@ -91,15 +91,10 @@ pub(super) async fn execute_postgres(
                 }
                 None => (stmt.clone(), None, None),
             };
-            let upper = sql_parser::blank_string_literals(exec_stmt.trim()).to_uppercase();
-
-            if upper.starts_with("SELECT")
-                || upper.starts_with("WITH")
-                || upper.starts_with("EXPLAIN")
-                || upper.starts_with("SHOW")
-                || upper.starts_with("TABLE ")
-                || upper.contains("RETURNING")
-            {
+            if crate::sql_exec_common::is_query_with(
+                &crate::sql_exec_common::POSTGRES_QUERY,
+                &exec_stmt,
+            ) {
                 let fetch = sqlx::query(&exec_stmt).fetch_all(&pool);
                 let rows: Vec<PgRow> = if timeout_secs > 0 {
                     match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)

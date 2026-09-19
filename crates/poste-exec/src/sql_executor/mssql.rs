@@ -88,7 +88,12 @@ pub async fn connect_mssql(url: &str) -> Result<MssqlClient> {
 /// Statements that return rows on the TDS batch path; everything else is run
 /// through the RPC execute path so DONE row counts are captured.
 pub fn is_query_stmt(stmt: &str) -> bool {
-    let upper = stmt.trim().to_uppercase();
+    // Classify on the literals-blanked, comments-stripped view: a leading
+    // `/* hint */` must not hide SELECT, and "returning" in a comment must
+    // not flip DML onto the fetch path (see the view's doc).
+    let upper = sql_parser::blank_literals_and_comments(stmt)
+        .trim_start()
+        .to_uppercase();
     upper.starts_with("SELECT")
         || upper.starts_with("WITH")
         || upper.starts_with("VALUES")
@@ -99,7 +104,9 @@ pub fn is_query_stmt(stmt: &str) -> bool {
 /// path: temp tables created inside the RPC prepare/execute scope are dropped
 /// when that scope exits and never become visible to the session.
 pub fn is_ddl_stmt(stmt: &str) -> bool {
-    let upper = stmt.trim().to_uppercase();
+    let upper = sql_parser::blank_literals_and_comments(stmt)
+        .trim_start()
+        .to_uppercase();
     upper.starts_with("CREATE") || upper.starts_with("ALTER") || upper.starts_with("DROP")
 }
 
@@ -384,5 +391,12 @@ mod tests {
         assert!(!is_query_stmt("UPDATE users SET a = 1"));
         assert!(!is_query_stmt("CREATE TABLE t (a INT)"));
         assert!(!is_query_stmt("BEGIN TRANSACTION"));
+        // comments are whitespace: a leading hint hides nothing
+        assert!(is_query_stmt("/* app: reporting */ SELECT * FROM users"));
+        assert!(!is_query_stmt(
+            "UPDATE t SET a = 1 /* returning to baseline */ WHERE id = 1"
+        ));
+        // DDL behind a comment still takes the batch path
+        assert!(is_ddl_stmt("-- keep temp table\nCREATE TABLE #t (a INT)"));
     }
 }

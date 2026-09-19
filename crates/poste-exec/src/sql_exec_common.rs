@@ -40,10 +40,14 @@ pub const MYSQL_QUERY: QueryKinds = QueryKinds {
     contains: &["RETURNING"],
 };
 
-/// Classify one statement against `kinds`. String literals are blanked
-/// first so `'returning'` inside a value cannot flip DML onto the fetch path.
+/// Classify one statement against `kinds`. String literals are blanked and
+/// comments removed first, so `'returning'` inside a value cannot flip DML
+/// onto the fetch path, and a leading `/* hint */` cannot hide SELECT from
+/// the prefix match (the comment view's doc has both regressions).
 pub fn is_query_with(kinds: &QueryKinds, stmt: &str) -> bool {
-    let upper = poste_core::sql_parser::blank_string_literals(stmt).to_uppercase();
+    let upper = poste_core::sql_parser::blank_literals_and_comments(stmt)
+        .trim_start()
+        .to_uppercase();
     kinds.starts_with.iter().any(|p| upper.starts_with(p))
         || kinds.contains.iter().any(|w| upper.contains(w))
 }
@@ -53,7 +57,7 @@ pub fn is_query_with(kinds: &QueryKinds, stmt: &str) -> bool {
 /// so pre-trimmed and raw statement text behave the same.
 pub fn is_skippable(stmt: &str) -> bool {
     let stmt = stmt.trim();
-    stmt.is_empty() || stmt.to_uppercase().starts_with("USE ")
+    stmt.is_empty() || poste_core::sql_parser::is_use_statement(stmt)
 }
 
 // ---------------------------------------------------------------------------
@@ -331,8 +335,31 @@ mod tests {
         assert!(is_skippable("   "));
         assert!(is_skippable("USE mydb"));
         assert!(is_skippable("use mydb;"));
+        assert!(is_skippable("USE\tmydb"), "any whitespace separates USE");
         assert!(!is_skippable("USELESS"));
         assert!(!is_skippable("SELECT * FROM use_table"));
+    }
+
+    #[test]
+    fn classification_sees_through_leading_comments() {
+        // A hint comment hid SELECT from the prefix match: the statement ran
+        // on the execute path and its rows were lost.
+        assert!(is_query_with(&POSTGRES_QUERY, "/*+ SeqScan(t) */ SELECT 1"));
+        assert!(is_query_with(&POSTGRES_QUERY, "-- header\nSELECT 1"));
+        assert!(is_query_with(
+            &POSTGRES_QUERY,
+            "/* intro */ WITH x AS (SELECT 1) SELECT * FROM x"
+        ));
+        // "returning" inside a comment must not flip DML onto the fetch path.
+        assert!(!is_query_with(
+            &POSTGRES_QUERY,
+            "UPDATE t SET a = 1 /* returning to baseline */ WHERE id = 1"
+        ));
+        // A real clause after a comment is still classified.
+        assert!(is_query_with(
+            &POSTGRES_QUERY,
+            "UPDATE t SET a = 1 /* note */ RETURNING id"
+        ));
     }
 
     #[test]

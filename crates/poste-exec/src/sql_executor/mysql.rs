@@ -40,16 +40,8 @@ pub(super) async fn execute_mysql(
         let stmt_conn = current_url.clone();
         let stmt_result: anyhow::Result<StatementResult> = async {
             let stmt_start = Instant::now();
-            let upper = sql_parser::blank_string_literals(stmt.trim()).to_uppercase();
 
-            if upper.starts_with("SELECT")
-                || upper.starts_with("WITH")
-                || upper.starts_with("EXPLAIN")
-                || upper.starts_with("SHOW")
-                || upper.starts_with("DESCRIBE")
-                || upper.starts_with("DESC ")
-                || upper.contains("RETURNING")
-            {
+            if crate::sql_exec_common::is_query_with(&crate::sql_exec_common::MYSQL_QUERY, stmt) {
                 let fetch = sqlx::query(stmt).fetch_all(&mut *conn);
                 let rows: Vec<MySqlRow> = if timeout_secs > 0 {
                     match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fetch)
