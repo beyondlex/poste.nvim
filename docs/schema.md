@@ -44,7 +44,11 @@ rules. Any change must be applied to every mirror in the same release:
 3. Field-form connections build a URL: `dialect` scheme + `host`/`port`/
    `database`/`user`/`password` (+ percent-encoding of reserved bytes).
    `dialect` aliases (`postgresql`→`postgres`, `mariadb`→`mysql`, …)
-   normalize to base dialects first.
+   normalize to base dialects first. `port` expands `{{VAR}}` like the
+   string fields — the value is only known after the environment is applied
+   — and must then be an integer in 1–65535; otherwise that one connection
+   errors while the rest of the file still resolves (Rust carries the
+   unparseable value in `ConnectionConfig::port_raw` until then).
 
 ## Subcommands
 
