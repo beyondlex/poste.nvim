@@ -123,23 +123,10 @@ pub async fn execute(action: ConnectionAction) -> Result<()> {
                 .get(&name)
                 .ok_or_else(|| anyhow::anyhow!("Connection '{}' not found", name))?;
 
-            // Resolve variables
-            let mut resolved = config.clone();
-            resolved.host = resolved
-                .host
-                .map(|s| poste_core::substitute_vars(&s, &env_vars));
-            resolved.password = resolved
-                .password
-                .map(|s| poste_core::substitute_vars(&s, &env_vars));
-            resolved.user = resolved
-                .user
-                .map(|s| poste_core::substitute_vars(&s, &env_vars));
-            resolved.database = resolved
-                .database
-                .map(|s| poste_core::substitute_vars(&s, &env_vars));
-            resolved.path = resolved
-                .path
-                .map(|s| poste_core::substitute_vars(&s, &env_vars));
+            // Resolve variables through the same helper `store.resolve` uses,
+            // so `test` cannot check a different URL than the one exec connects
+            // with (this list used to be a hand-copied duplicate of that one).
+            let resolved = config.with_vars_resolved(&name, &env_vars)?;
 
             print!("Testing connection '{}' ... ", name);
             std::io::Write::flush(&mut std::io::stdout())?;

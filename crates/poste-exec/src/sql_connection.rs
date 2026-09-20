@@ -104,6 +104,15 @@ pub struct ConnectionConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
 
+    /// `port` exactly as written, kept when it is not already a usable port
+    /// number. Two reasons to defer rather than reject at parse time: a
+    /// `{{var}}` reference is only resolvable once the environment is known
+    /// (Lua's `apply_env` substitutes every field, `port` included, before
+    /// validating it), and a genuinely broken `port` should fail the one
+    /// connection that has it instead of the whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_raw: Option<String>,
+
     /// Database name for network databases
     #[serde(skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
@@ -205,6 +214,39 @@ impl ConnectionConfig {
             _ => String::new(),
         }
     }
+
+    /// Return a copy with every `{{var}}` reference resolved — `port`
+    /// included. One function on purpose: `ConnectionStore::resolve` and the
+    /// CLI's `connection test` used to carry their own field lists, and the
+    /// two had already drifted (neither substituted `port`), so the editor
+    /// and the CLI could end up on different servers from one file.
+    /// Errors on a deferred `port` that never becomes a port number — either
+    /// a reference the environment does not define or a value that was never
+    /// one. The value is not echoed, since `port = "{{POSTE_PASS}}"` is a
+    /// plausible typo and this message reaches a terminal.
+    pub fn with_vars_resolved(
+        &self,
+        name: &str,
+        env_vars: &HashMap<String, String>,
+    ) -> Result<Self> {
+        let sub = |s: Option<String>| s.map(|s| substitute_vars(&s, env_vars));
+        let mut resolved = self.clone();
+        resolved.host = sub(resolved.host);
+        resolved.password = sub(resolved.password);
+        resolved.user = sub(resolved.user);
+        resolved.database = sub(resolved.database);
+        resolved.path = sub(resolved.path);
+        if let Some(raw) = resolved.port_raw.take() {
+            match parse_port(&substitute_vars(&raw, env_vars)) {
+                Some(n) => resolved.port = Some(n),
+                None => anyhow::bail!(
+                    "connection '{}' has a port that is not a number between 1 and 65535",
+                    name
+                ),
+            }
+        }
+        Ok(resolved)
+    }
 }
 
 /// Store for loading and resolving connection configurations.
@@ -287,15 +329,7 @@ impl ConnectionStore {
             anyhow::anyhow!("Connection '{}' not found in the connection store", name)
         })?;
 
-        // Clone and substitute variables in all string fields
-        let mut resolved = config.clone();
-        resolved.host = resolved.host.map(|s| substitute_vars(&s, env_vars));
-        resolved.password = resolved.password.map(|s| substitute_vars(&s, env_vars));
-        resolved.user = resolved.user.map(|s| substitute_vars(&s, env_vars));
-        resolved.database = resolved.database.map(|s| substitute_vars(&s, env_vars));
-        resolved.path = resolved.path.map(|s| substitute_vars(&s, env_vars));
-
-        Ok(resolved.to_url())
+        Ok(config.with_vars_resolved(name, env_vars)?.to_url())
     }
 
     /// Get the source file path.
@@ -348,12 +382,28 @@ fn find_connections_file(search_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Parse a `port` as written in `connections.toml` — an integer or a numeric
+/// string — bounded to a real socket port. It goes through `f64` because that
+/// is the set Lua's `tonumber` accepts (so `"5432.0"` is a port here too, and
+/// `"5432.5"` is not), and the range is checked explicitly rather than left to
+/// `u16::try_from`: port 0 fits a `u16` and is not a socket port.
+fn parse_port(raw: &str) -> Option<u16> {
+    let value = raw.trim().parse::<f64>().ok()?;
+    if value.floor() != value || !(1.0..=65535.0).contains(&value) {
+        return None;
+    }
+    Some(value as u16)
+}
+
 /// Parse `connections.toml` into the store map. Field extraction is
 /// deliberately tolerant — the same tolerance the Lua resolver applies:
 /// top-level scalars (`description = "…"` above the first section) and
 /// non-connection tables (satellite sections, a `tunnel` sub-table) are
 /// ignored, `port` accepts both integer and string, and a missing `dialect`
-/// defaults to `postgres` (Lua's `is_sql_dialect(nil) == true` rule).
+/// defaults to `postgres` (Lua's `is_sql_dialect(nil) == true` rule). A
+/// `port` that is not yet a usable port number is not rejected here either —
+/// it is kept verbatim on the connection so `with_vars_resolved` can decide
+/// once the environment is known, and report it against that one name.
 fn connections_from_toml(content: &str) -> Result<HashMap<String, ConnectionConfig>> {
     let root: toml::Value = toml::from_str(content)
         .map_err(|e| anyhow::anyhow!("connections.toml parse error: {}", e))?;
@@ -368,17 +418,27 @@ fn connections_from_toml(content: &str) -> Result<HashMap<String, ConnectionConf
         let string_field = |key: &str| -> Option<String> {
             table.get(key).and_then(|v| v.as_str()).map(String::from)
         };
-        let port = table.get("port").and_then(|v| match v {
-            toml::Value::Integer(n) => u16::try_from(*n).ok(),
-            toml::Value::String(s) => s.trim().parse::<u16>().ok(),
-            _ => None,
+        let raw_port = table.get("port").map(|v| match v {
+            toml::Value::Integer(n) => n.to_string(),
+            toml::Value::String(s) => s.clone(),
+            // `port = true`, a table, …: anything that can never parse as a
+            // port, kept so `resolve` reports it against the connection name
+            other => other.to_string(),
         });
+        let (port, port_raw) = match &raw_port {
+            Some(raw) => match parse_port(raw) {
+                Some(n) => (Some(n), None),
+                None => (None, Some(raw.clone())),
+            },
+            None => (None, None),
+        };
         let config = ConnectionConfig {
             // Missing dialect behaves like postgres, mirroring the Lua
             // resolver's nil-dialect default.
             dialect: string_field("dialect").unwrap_or_else(|| "postgres".to_string()),
             host: string_field("host"),
             port,
+            port_raw,
             database: string_field("database"),
             user: string_field("user"),
             password: string_field("password"),
@@ -462,6 +522,7 @@ mod tests {
             password: Some("secret".to_string()),
             path: None,
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(
@@ -481,6 +542,7 @@ mod tests {
             password: Some("p@ss:w/rd%".to_string()),
             path: None,
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(
@@ -500,6 +562,7 @@ mod tests {
             password: Some("pw".to_string()),
             path: None,
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(
@@ -519,6 +582,7 @@ mod tests {
             password: None,
             path: None,
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(config.to_url(), "postgres://user@db.example.com:5432/prod");
@@ -535,6 +599,7 @@ mod tests {
             password: Some("pass123".to_string()),
             path: None,
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(
@@ -554,6 +619,7 @@ mod tests {
             password: None,
             path: Some("./data/app.db".to_string()),
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(config.to_url(), "sqlite:./data/app.db?mode=rwc");
@@ -570,6 +636,7 @@ mod tests {
             password: None,
             path: None,
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(config.to_url(), "sqlite::memory:");
@@ -611,6 +678,7 @@ mod tests {
                 password: Some("{{db_pass}}".to_string()),
                 path: None,
                 ssl_mode: None,
+                port_raw: None,
                 extra_params: HashMap::new(),
             },
         );
@@ -667,6 +735,7 @@ mod tests {
                 password: None,
                 path: None,
                 ssl_mode: None,
+                port_raw: None,
                 extra_params: HashMap::new(),
             },
         );
@@ -681,6 +750,7 @@ mod tests {
                 password: None,
                 path: Some("./data.db".to_string()),
                 ssl_mode: None,
+                port_raw: None,
                 extra_params: HashMap::new(),
             },
         );
@@ -776,6 +846,7 @@ mod tests {
             password: None,
             path: None,
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(config.to_url(), "postgres://localhost:5432/db");
@@ -799,6 +870,7 @@ mod tests {
             password: None,
             path: Some("./data/app.db?cache=shared".to_string()),
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(
@@ -821,6 +893,7 @@ mod tests {
             password: None,
             path: None,
             ssl_mode: None,
+            port_raw: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(config.to_url(), "postgres://localhost:5432/my%20db%2Fprod");
@@ -951,5 +1024,87 @@ host = ",
             .err()
             .expect("broken toml must fail");
         assert!(format!("{}", err).contains("connections.toml parse error"));
+    }
+
+    #[test]
+    fn store_unusable_port_fails_only_that_connection_and_names_it() {
+        // A `port` that is not a port number used to fall through to the
+        // dialect default, so `poste connection test` checked 5432 while the
+        // Lua resolver refused the same entry. Refusing it must stay scoped to
+        // that connection: the file is shared, and one typo'd section taking
+        // down every other connection would be the worse bug.
+        for value in [
+            "\"{{MISSING_PORT}}\"",
+            "70000",
+            "\"70000\"",
+            "0",
+            "\"abc\"",
+            "5432.5",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            write_toml(
+                dir.path(),
+                &format!(
+                    "[dev]\ndialect = \"postgres\"\nhost = \"h\"\nport = {value}\n\
+                     [ok]\ndialect = \"postgres\"\nhost = \"h\"\n"
+                ),
+            );
+            let store = ConnectionStore::load(dir.path())
+                .unwrap_or_else(|e| panic!("port = {value} must not fail the load: {e}"));
+            assert_eq!(
+                store.resolve("ok", &Default::default()).unwrap(),
+                "postgres://h:5432/",
+                "a sibling connection still resolves"
+            );
+            let err = store
+                .resolve("dev", &Default::default())
+                .err()
+                .unwrap_or_else(|| panic!("port = {value} must fail the resolve"));
+            let msg = format!("{}", err);
+            assert!(msg.contains("dev"), "message names the connection: {msg}");
+            assert!(msg.contains("port"), "message says what is wrong: {msg}");
+            assert!(
+                !msg.contains("MISSING_PORT") && !msg.contains("70000"),
+                "the offending value stays out of the message: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn store_port_comes_from_the_environment_like_the_editor_does() {
+        // Lua's `apply_env` substitutes `port` before validating it, so
+        // `port = "{{DB_PORT}}"` is a supported config. Dropping it here sent
+        // the CLI to 5432 while the editor connected to the real port.
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(
+            dir.path(),
+            "[dev]\ndialect = \"postgres\"\nhost = \"h\"\nport = \"{{DB_PORT}}\"\n",
+        );
+        let store = ConnectionStore::load(dir.path()).unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("DB_PORT".to_string(), "6000".to_string());
+        assert_eq!(
+            store.resolve("dev", &vars).unwrap(),
+            "postgres://h:6000/",
+            "an env-sourced port must reach the URL, not the dialect default"
+        );
+    }
+
+    #[test]
+    fn store_accepts_a_quoted_port_and_a_missing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(
+            dir.path(),
+            "[a]\ndialect = \"mysql\"\nhost = \"h\"\nport = \"3307\"\n[b]\ndialect = \"mysql\"\nhost = \"h\"\n",
+        );
+        let store = ConnectionStore::load(dir.path()).unwrap();
+        assert_eq!(
+            store.resolve("a", &Default::default()).unwrap(),
+            "mysql://h:3307/"
+        );
+        assert_eq!(
+            store.resolve("b", &Default::default()).unwrap(),
+            "mysql://h:3306/"
+        );
     }
 }
