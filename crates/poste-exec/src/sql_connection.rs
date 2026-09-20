@@ -292,6 +292,14 @@ impl ConnectionStore {
                 // mariadb → mysql, …) — mirror of the Lua resolver
                 for conn in connections.values_mut() {
                     conn.dialect = normalize_dialect(&conn.dialect).to_string();
+                    // The legacy JSON path types `port` as a bare u16, so 0 is
+                    // the one unusable value serde lets through (the TOML path
+                    // goes through `parse_port`). Defer it the same way so
+                    // `resolve` refuses it by name instead of building `…:0/…`.
+                    if conn.port == Some(0) {
+                        conn.port_raw = Some("0".to_string());
+                        conn.port = None;
+                    }
                 }
                 Ok(Self {
                     connections,
@@ -1010,6 +1018,22 @@ host = "toml-host"
             store.resolve("b", &Default::default()).unwrap(),
             "mysql://h:3307/"
         );
+    }
+
+    #[test]
+    fn store_json_port_zero_is_refused_like_tomls_is() {
+        // `port` in the legacy JSON file is a bare u16, so 0 — not a socket
+        // port — was the one unusable value that survived the load
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("connections.json"),
+            r#"{"b": {"dialect": "mysql", "host": "h", "port": 0}}"#,
+        )
+        .unwrap();
+        let store = ConnectionStore::load(dir.path()).unwrap();
+        let err = format!("{}", store.resolve("b", &Default::default()).unwrap_err());
+        assert!(err.contains("port"), "says what is wrong: {err}");
+        assert!(err.contains('b'), "names the connection: {err}");
     }
 
     #[test]
