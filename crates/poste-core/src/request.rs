@@ -30,6 +30,34 @@ impl Request {
     }
 }
 
+impl Protocol {
+    /// Sniff a SQL protocol from a connection URL's scheme, first match
+    /// winning. The single Rust copy of this rule (the CLI's exec/session/
+    /// introspect entry points all use it) and the mirror of Lua's
+    /// `constants.URL_SCHEMES` in poste-db, which lists the same prefixes.
+    ///
+    /// `mariadb://` belongs here: sqlx's MySQL driver declares
+    /// `URL_SCHEMES = ["mysql", "mariadb"]`, so a raw `url = "mariadb://…"`
+    /// connection is connectable, and a sniff that ignored the scheme failed
+    /// it as "cannot determine protocol" while the Lua side already read it
+    /// as MySQL for display and session context.
+    pub fn from_sql_url(url: &str) -> Option<Self> {
+        if url.starts_with("sqlite:") {
+            Some(Self::Sqlite)
+        } else if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            Some(Self::Postgres)
+        } else if url.starts_with("mysql://") || url.starts_with("mariadb://") {
+            Some(Self::Mysql)
+        } else if url.starts_with("mssql://") {
+            Some(Self::Mssql)
+        } else if url.starts_with("clickhouse://") {
+            Some(Self::ClickHouse)
+        } else {
+            None
+        }
+    }
+}
+
 /// Replace the database name in a connection URL.
 /// "postgres://user:pass@host:5432/olddb" → "postgres://user:pass@host:5432/newdb"
 /// Handles URLs with or without auth, port, and existing database. Any query
@@ -54,7 +82,52 @@ pub fn replace_database_in_url(url: &str, new_db: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::replace_database_in_url;
+    use super::{replace_database_in_url, Protocol};
+
+    #[test]
+    fn sniffs_every_supported_scheme() {
+        // The mirror pair is Lua's constants.URL_SCHEMES — a scheme added
+        // there without being added here makes a legal connections.toml
+        // `url = "…"` fail only on execution.
+        assert_eq!(
+            Protocol::from_sql_url("sqlite:./app.db"),
+            Some(Protocol::Sqlite)
+        );
+        assert_eq!(
+            Protocol::from_sql_url("postgres://h/db"),
+            Some(Protocol::Postgres)
+        );
+        assert_eq!(
+            Protocol::from_sql_url("postgresql://h/db"),
+            Some(Protocol::Postgres)
+        );
+        assert_eq!(
+            Protocol::from_sql_url("mysql://h/db"),
+            Some(Protocol::Mysql)
+        );
+        assert_eq!(
+            Protocol::from_sql_url("mariadb://user:pw@h:3306/db"),
+            Some(Protocol::Mysql),
+            "sqlx's MySQL driver lists mariadb:// as a valid scheme"
+        );
+        assert_eq!(
+            Protocol::from_sql_url("mssql://h/db"),
+            Some(Protocol::Mssql)
+        );
+        assert_eq!(
+            Protocol::from_sql_url("clickhouse://h/db"),
+            Some(Protocol::ClickHouse)
+        );
+    }
+
+    #[test]
+    fn rejects_foreign_and_bare_urls() {
+        assert_eq!(Protocol::from_sql_url("redis://h:6379/0"), None);
+        assert_eq!(Protocol::from_sql_url("http://h/db"), None);
+        assert_eq!(Protocol::from_sql_url(""), None);
+        // scheme sniffing is prefix-based and case-sensitive, like Lua's
+        assert_eq!(Protocol::from_sql_url("PostgreSQL://h/db"), None);
+    }
 
     #[test]
     fn replaces_database() {

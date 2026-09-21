@@ -66,24 +66,12 @@ where
     }
 
     // Detect protocol from connection URL
-    let protocol = if connection_url.starts_with("sqlite:") {
-        poste_core::Protocol::Sqlite
-    } else if connection_url.starts_with("mysql://") {
-        poste_core::Protocol::Mysql
-    } else if connection_url.starts_with("mssql://") {
-        poste_core::Protocol::Mssql
-    } else if connection_url.starts_with("clickhouse://") {
-        poste_core::Protocol::ClickHouse
-    } else if connection_url.starts_with("postgres://")
-        || connection_url.starts_with("postgresql://")
-    {
-        poste_core::Protocol::Postgres
-    } else {
-        anyhow::bail!(
+    let protocol = poste_core::Protocol::from_sql_url(&connection_url).ok_or_else(|| {
+        anyhow::anyhow!(
             "Cannot determine protocol from connection URL: {}",
-            connection_url
-        );
-    };
+            crate::connection::mask_url_password(&connection_url)
+        )
+    })?;
 
     // Extract database from connection URL for display
     let database = extract_database_from_url(&connection_url);

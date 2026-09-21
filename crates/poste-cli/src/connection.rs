@@ -5,7 +5,11 @@ use poste_exec::sql_connection::{test_connection, ConnectionStore};
 
 /// Mask the password portion of a connection URL for safe display.
 /// `postgres://user:secret@host/db` → `postgres://user:****@host/db`.
-fn mask_url_password(url: &str) -> String {
+///
+/// Every CLI message that quotes a Lua-resolved `--connection` URL goes
+/// through this: those URLs carry the real password, and an error line ends
+/// up in a terminal, a `:messages` buffer and often a saved result file.
+pub(crate) fn mask_url_password(url: &str) -> String {
     let Some(scheme_end) = url.find("://") else {
         return url.to_string();
     };
