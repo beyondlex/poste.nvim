@@ -38,6 +38,33 @@ pub struct MqSessionArgs {
 /// watch buffer and gives ack-mode consumers backpressure against floods.
 const WATCH_PREFETCH: u16 = 500;
 
+/// The queue and ack mode a `consumer start` request must name.
+///
+/// Both rules are about silence. A missing or empty `queue` used to reach
+/// `basic_consume("")`, which AMQP answers by creating a *server-named* queue:
+/// the request reported ok, the tail watched a queue nothing publishes to, and
+/// the broker kept the queue. And an `ack` that is present but not a boolean
+/// used to read as `false`, quietly turning an ack-mode (destructive) tail into
+/// a requeue tail — the safe direction, but not the one that was asked for.
+fn consumer_start_target(req: &Value) -> std::result::Result<(String, bool), String> {
+    let queue = req
+        .get("queue")
+        .and_then(|q| q.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if queue.is_empty() {
+        return Err("consumer start needs a non-empty \"queue\"".to_string());
+    }
+    let ack = match req.get("ack") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(ack)) => *ack,
+        // The value is not echoed: a mistaken field must not end up in a log.
+        Some(_) => return Err("consumer \"ack\" must be a boolean".to_string()),
+    };
+    Ok((queue, ack))
+}
+
 /// Live consumer registry entry: forwarder task + stop signal. The stop
 /// signal lets the task requeue outstanding deliveries before exiting,
 /// instead of abort() leaving messages in unacked limbo.
@@ -105,12 +132,14 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
             let action = req.get("action").and_then(|a| a.as_str()).unwrap_or("");
             match action {
                 "start" => {
-                    let queue = req
-                        .get("queue")
-                        .and_then(|q| q.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let ack = req.get("ack").and_then(|a| a.as_bool()).unwrap_or(false);
+                    let (queue, ack) = match consumer_start_target(&req) {
+                        Ok(target) => target,
+                        Err(msg) => {
+                            let _ = main_tx.send(json!({"type":"result","seq":seq,
+                                    "status":"error","error":msg}));
+                            continue;
+                        }
+                    };
                     if consumers.contains_key(&consumer_name) {
                         let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"error",
                                 "error":format!("consumer already running: {}", consumer_name)}));
@@ -224,14 +253,22 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
                     }
                 }
                 "stop" => {
-                    if let Some(handle) = consumers.remove(&consumer_name) {
-                        // Signal the forwarder so it batch-requeues any held
-                        // deliveries before unregistering, then wait for it.
-                        let _ = handle.stop.send(());
-                        let _ = handle.task.await;
-                    }
+                    // `stopped` says whether anything was actually torn down:
+                    // a duplicate or mistyped name used to answer `true` for a
+                    // consumer that never existed, which is indistinguishable
+                    // from a real stop on the other side of the wire.
+                    let stopped = match consumers.remove(&consumer_name) {
+                        Some(handle) => {
+                            // Signal the forwarder so it batch-requeues any held
+                            // deliveries before unregistering, then wait for it.
+                            let _ = handle.stop.send(());
+                            let _ = handle.task.await;
+                            true
+                        }
+                        None => false,
+                    };
                     let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"ok",
-                            "value":{"consumer":consumer_name,"stopped":true}}));
+                            "value":{"consumer":consumer_name,"stopped":stopped}}));
                 }
                 other => {
                     let _ = main_tx.send(json!({"type":"result","seq":seq,"status":"error",
@@ -289,4 +326,54 @@ pub async fn execute(args: MqSessionArgs) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(line: &str) -> std::result::Result<(String, bool), String> {
+        consumer_start_target(&serde_json::from_str(line).expect("request json"))
+    }
+
+    #[test]
+    fn start_target_reads_queue_and_ack() {
+        assert_eq!(
+            target(r#"{"consumer":"tail","queue":"jobs","ack":true}"#).unwrap(),
+            ("jobs".to_string(), true)
+        );
+        assert_eq!(
+            target(r#"{"consumer":"tail","queue":"  jobs  "}"#).unwrap(),
+            ("jobs".to_string(), false),
+            "the name is trimmed, and ack defaults to the non-destructive mode"
+        );
+    }
+
+    #[test]
+    fn start_target_requires_a_queue_name() {
+        // An empty name is not "watch the default queue" — AMQP mints a
+        // server-named queue and the session tails it happily forever.
+        for line in [
+            r#"{"consumer":"tail"}"#,
+            r#"{"consumer":"tail","queue":null}"#,
+            r#"{"consumer":"tail","queue":""}"#,
+            r#"{"consumer":"tail","queue":"   "}"#,
+            r#"{"consumer":"tail","queue":42}"#,
+        ] {
+            let err = target(line).unwrap_err();
+            assert!(err.contains("queue"), "{line} -> {err}");
+        }
+    }
+
+    #[test]
+    fn start_target_rejects_a_non_boolean_ack() {
+        // `"ack": "yes"` must not quietly become a requeue tail.
+        let err = target(r#"{"consumer":"tail","queue":"jobs","ack":"yes"}"#).unwrap_err();
+        assert!(err.contains("ack"), "{err}");
+        assert!(
+            !err.contains("yes"),
+            "the rejected value must not be echoed: {err}"
+        );
+        assert!(target(r#"{"consumer":"tail","queue":"j","ack":null}"#).is_ok());
+    }
 }
