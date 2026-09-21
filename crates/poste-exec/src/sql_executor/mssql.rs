@@ -22,9 +22,12 @@ pub type MssqlClient = tiberius::Client<tokio_util::compat::Compat<tokio::net::T
 /// Lua `resolve_connection_url` and Rust `to_url()` produce) into a tiberius
 /// config.
 pub fn mssql_url_to_config(url: &str) -> Result<tiberius::Config> {
-    let rest = url
-        .strip_prefix("mssql://")
-        .ok_or_else(|| anyhow!("not an mssql:// URL: {}", url))?;
+    let rest = url.strip_prefix("mssql://").ok_or_else(|| {
+        anyhow!(
+            "not an mssql:// URL: {}",
+            poste_core::mask_url_password(url)
+        )
+    })?;
 
     let (auth, hostport_db) = match rest.rsplit_once('@') {
         Some((auth, rest)) => (Some(auth), rest),

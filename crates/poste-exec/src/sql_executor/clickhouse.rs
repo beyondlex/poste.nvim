@@ -39,9 +39,12 @@ pub struct ChResponse {
 /// Parse `clickhouse://user:pass@host:8123/database`. The scheme implies
 /// http; https servers are out of scope for now (dev-tool posture).
 pub fn clickhouse_url_to_config(url: &str) -> Result<(String, String, String, String)> {
-    let rest = url
-        .strip_prefix("clickhouse://")
-        .ok_or_else(|| anyhow!("not a clickhouse:// URL: {}", url))?;
+    let rest = url.strip_prefix("clickhouse://").ok_or_else(|| {
+        anyhow!(
+            "not a clickhouse:// URL: {}",
+            poste_core::mask_url_password(url)
+        )
+    })?;
 
     let (auth, hostport_db) = match rest.rsplit_once('@') {
         Some((auth, rest)) => (Some(auth), rest),

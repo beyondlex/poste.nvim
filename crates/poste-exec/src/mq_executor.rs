@@ -46,7 +46,7 @@ pub fn validate_connection_url(url: &str) -> Result<()> {
     } else {
         Err(anyhow::anyhow!(
             "Not an amqp connection URL (expected amqp:// or amqps://): {}",
-            url
+            poste_core::mask_url_password(url)
         ))
     }
 }
