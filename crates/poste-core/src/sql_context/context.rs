@@ -37,6 +37,28 @@ pub fn detect_context_with_dialect(
     } else {
         cursor_idx_raw
     };
+    // The editor reports the cursor one past the last typed character, and the
+    // tokenizer starts the next token at exactly that offset.  A cursor flush
+    // against an identifier is still *inside* that reference — no space, comma
+    // or bracket has been typed yet — so read it as the identifier.  Otherwise
+    // `alias.col` keeps its column context only at end of buffer, and
+    // `REFERENCES users▮)` reads as a finished table.
+    //
+    // A dot and an opening paren are the exceptions: they read forward, and the
+    // detectors already handle them (`u.▮` takes its qualifier from the token
+    // before the dot, `COALESCE(▮` is a function's argument list, not a name
+    // being typed).
+    let cursor_idx = if cursor_idx > 0
+        && !matches!(tokens[cursor_idx].kind, TokenKind::Dot | TokenKind::LParen)
+        && tokens[cursor_idx - 1].end == offset
+        && matches!(
+            tokens[cursor_idx - 1].kind,
+            TokenKind::Ident | TokenKind::QuotedIdent | TokenKind::Keyword | TokenKind::NumLit
+        ) {
+        cursor_idx - 1
+    } else {
+        cursor_idx
+    };
     let cursor_tok = &tokens[cursor_idx];
 
     let in_string = cursor_tok.kind == TokenKind::StrLit;

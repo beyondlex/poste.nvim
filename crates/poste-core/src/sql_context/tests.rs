@@ -2123,3 +2123,92 @@ fn test_cte_stays_visible_across_union_arms() {
         "a CTE belongs to the statement, not one arm: {names:?}"
     );
 }
+
+// ---- Cursor sitting flush against the token it just typed ----
+
+/// `detect_context` for SQL with the cursor marked `▮`, so text can follow the
+/// cursor the way it does on a real line.
+fn detect_at(marked: &str) -> ContextResult {
+    let offset = marked.find('▮').expect("cursor marker");
+    detect_context(&marked.replace('▮', ""), offset).expect("context")
+}
+
+#[test]
+fn test_typed_prefix_after_a_dot_keeps_its_alias() {
+    let result = detect_at("SELECT u.na▮ FROM users u");
+    assert_eq!(
+        result.context_type,
+        ContextType::DotColumn {
+            table: "u".into(),
+            schema: None
+        },
+        "a cursor flush after `na` is still inside that column reference"
+    );
+    assert_eq!(result.prefix, "na");
+    assert!(result
+        .tables
+        .iter()
+        .any(|t| t.name == "users" && t.alias == Some("u".into())));
+}
+
+#[test]
+fn test_typed_prefix_after_a_qualified_dot_keeps_its_table() {
+    let result = detect_at("SELECT public.users.na▮ FROM t");
+    assert_eq!(
+        result.context_type,
+        ContextType::DotColumn {
+            table: "users".into(),
+            schema: Some("public".into())
+        }
+    );
+    assert_eq!(result.prefix, "na");
+}
+
+#[test]
+fn test_typed_prefix_in_a_from_list_is_still_a_table() {
+    let result = detect_at("SELECT * FROM users, lo▮ WHERE 1=1");
+    assert_eq!(result.context_type, ContextType::Table);
+    assert_eq!(result.prefix, "lo");
+    let names: Vec<&str> = result.tables.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"users"), "got {names:?}");
+}
+
+#[test]
+fn test_typed_prefix_in_update_set_completes_columns() {
+    for marked in [
+        "UPDATE users SET na▮ WHERE id = 1",
+        "UPDATE users SET a = n▮ WHERE id = 1",
+        "UPDATE users SET a = 1, n▮ WHERE id = 1",
+    ] {
+        let result = detect_at(marked);
+        assert_eq!(result.context_type, ContextType::Column, "{marked}");
+        assert!(result.tables.iter().any(|t| t.name == "users"), "{marked}");
+    }
+}
+
+#[test]
+fn test_typed_prefix_in_session_set_still_completes_keywords() {
+    for marked in [
+        "SET work_mem▮",
+        "SET work_mem▮ = '4MB'",
+        "SET SESSION work_mem▮ = 4",
+    ] {
+        let result = detect_at(marked);
+        assert_eq!(result.context_type, ContextType::Keyword, "{marked}");
+    }
+}
+
+#[test]
+fn test_on_duplicate_key_update_lhs_completes_columns() {
+    let result = detect_at("INSERT INTO users (id) VALUES (1) ON DUPLICATE KEY UPDATE visi▮ts = 1");
+    assert_eq!(result.context_type, ContextType::Column);
+    let names: Vec<&str> = result.tables.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["users"], "no phantom relation: {names:?}");
+}
+
+#[test]
+fn test_references_clause_completes_a_table() {
+    let result = detect_at("CREATE TABLE posts (id int, author_id int REFERENCES users▮)");
+    assert_eq!(result.context_type, ContextType::Table);
+    assert_eq!(result.prefix, "users");
+}

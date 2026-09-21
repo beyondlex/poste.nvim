@@ -1,5 +1,6 @@
 use super::tokenizer::{
-    is_column_keyword, is_predicate_keyword, is_table_keyword, kw_eq, skip_back, Token, TokenKind,
+    is_column_keyword, is_predicate_keyword, is_table_keyword, is_upsert_update, kw_eq, skip_back,
+    Token, TokenKind,
 };
 use super::ContextType;
 
@@ -24,6 +25,11 @@ pub(crate) fn detect_scan_backward(
             TokenKind::Keyword => {
                 let kw = tok.text(sql).to_ascii_lowercase();
                 if is_table_keyword(&kw) {
+                    if kw == "update" && is_upsert_update(tokens, sql, i) {
+                        // MySQL's upsert assigns to a column here; the relation
+                        // was named by the `INSERT INTO` this clause hangs off.
+                        return ContextType::Column;
+                    }
                     if !skip_one_ident && !cursor_on_ident {
                         // We already passed a table name after the keyword
                         // and the cursor is not on an identifier — the user
@@ -75,7 +81,20 @@ pub(crate) fn detect_scan_backward(
                         return ContextType::Keyword;
                     }
                     if kw == "set" && !skip_one_ident {
+                        // A session-level `SET` is claimed by `try_bare_set`
+                        // before this scanner runs, so reaching here means the
+                        // assignment list of `UPDATE … SET`.  The word under the
+                        // cursor is a column name while that assignment has no
+                        // value yet — `SET` / `=` / `,` immediately precede it.
+                        // After a finished value (`bio='' w▮`) the user is typing
+                        // the clause that follows instead.
                         if cursor_on_ident {
+                            let before = skip_back(tokens, cursor_idx).unwrap_or(i);
+                            if before == i
+                                || matches!(tokens[before].kind, TokenKind::Op | TokenKind::Comma)
+                            {
+                                return ContextType::Column;
+                            }
                             return ContextType::Keyword;
                         }
                         for check in (0..cursor_idx).rev() {

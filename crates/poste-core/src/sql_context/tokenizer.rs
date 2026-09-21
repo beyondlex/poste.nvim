@@ -502,6 +502,7 @@ pub(crate) fn is_known_keyword(word: &str) -> bool {
         b"DO",
         b"DOUBLE",
         b"DROP",
+        b"DUPLICATE",
         b"ELSE",
         b"END",
         b"EXCEPT",
@@ -612,6 +613,13 @@ pub(crate) fn is_known_keyword(word: &str) -> bool {
     KWS.contains(&up_slice)
 }
 
+/// Keywords after which the next token names a relation to complete against:
+/// query clauses (`from`, `into`, `join`, `update`), DDL/DML heads (`table`,
+/// `sequence`, `copy`, `call`, `analyze`, `vacuum`) and `references`, whose
+/// foreign-key target is a table like any other.
+///
+/// `update` also matches MySQL's `ON DUPLICATE KEY UPDATE`, where the next word
+/// is a column — `scanner::detect_scan_backward` special-cases that.
 pub(crate) fn is_table_keyword(w: &str) -> bool {
     matches!(
         w,
@@ -621,6 +629,7 @@ pub(crate) fn is_table_keyword(w: &str) -> bool {
             | "from"
             | "into"
             | "join"
+            | "references"
             | "sequence"
             | "table"
             | "update"
@@ -702,6 +711,25 @@ pub(crate) fn skip_back(tokens: &[Token], mut i: usize) -> Option<usize> {
             _ => return Some(i),
         }
     }
+}
+
+/// Is the `UPDATE` at `kw_idx` the assignment clause of MySQL's upsert
+/// (`INSERT … ON DUPLICATE KEY UPDATE col = …`)?
+///
+/// There the next word is a column of the insert target, not a relation name —
+/// without this, `is_table_keyword("update")` makes the scanner offer tables.
+pub(crate) fn is_upsert_update(tokens: &[Token], sql: &str, kw_idx: usize) -> bool {
+    let mut i = kw_idx;
+    for expected in ["key", "duplicate", "on"] {
+        i = match skip_back(tokens, i) {
+            Some(x) => x,
+            None => return false,
+        };
+        if tokens[i].kind != TokenKind::Keyword || !kw_eq(tokens[i].text(sql), expected) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Scan forward from a token index, skipping whitespace and comments.

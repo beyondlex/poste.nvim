@@ -1,6 +1,7 @@
 use super::tables::parse_table_ref;
 use super::tokenizer::{
-    is_known_keyword, is_set_operator, is_table_keyword, kw_eq, skip_forward, Token, TokenKind,
+    is_column_keyword, is_known_keyword, is_set_operator, is_table_keyword, is_upsert_update,
+    kw_eq, skip_forward, Token, TokenKind,
 };
 use super::TableRef;
 
@@ -135,7 +136,10 @@ pub(crate) fn resolve_scope_at(
                     extract_cte_names(tokens, i, sql, scope);
                 }
 
-                if is_table_keyword(&kw_lower) {
+                // `ON DUPLICATE KEY UPDATE col = …` names a column, not a table,
+                // even though `update` is otherwise a relation-introducing word.
+                let upsert = kw_lower == "update" && is_upsert_update(tokens, sql, i);
+                if is_table_keyword(&kw_lower) && !upsert {
                     if let Some(next) = skip_forward(tokens, i) {
                         register_table_list(tokens, next, sql, scope);
                     }
@@ -316,6 +320,15 @@ fn register_table_list(tokens: &[Token], start: usize, sql: &str, scope: &mut Qu
                 Some(x) => x,
                 None => return,
             };
+        }
+
+        // A clause keyword is never a relation name: `INSERT … DO UPDATE SET ▮`
+        // arrives here with `SET` as the element that follows the `UPDATE`
+        // keyword, and registering it advertises a table that cannot exist.
+        if tokens[i].kind == TokenKind::Keyword
+            && is_column_keyword(&tokens[i].text(sql).to_ascii_lowercase())
+        {
+            return;
         }
 
         if tokens[i].kind == TokenKind::LParen {

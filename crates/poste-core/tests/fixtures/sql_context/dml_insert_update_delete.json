@@ -119,8 +119,7 @@
       "ctx_schema": null,
       "prefix": "",
       "tables": [
-        { "name": "users", "alias": null, "schema": null },
-        { "name": "SET", "alias": null, "schema": null }
+        { "name": "users", "alias": null, "schema": null }
       ],
       "in_string": false,
       "in_comment": false
