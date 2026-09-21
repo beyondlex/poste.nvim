@@ -1957,6 +1957,23 @@ fn test_all_ranges_empty_statement_no_phantom() {
 }
 
 #[test]
+fn test_all_ranges_tagged_dollar_body_is_one_statement() {
+    // The `;` inside `$fn$ … $fn$` is function-body text, so this is two
+    // statements — the same reading `sql_parser::split_statements` gives when
+    // the file actually runs. The range finder only knew `$$`, so it cut the
+    // CREATE FUNCTION in half and offered the tail of the body as a statement
+    // of its own to execute.
+    let lines = [
+        "CREATE FUNCTION f() AS $fn$",
+        "  BEGIN EXECUTE 'SELECT 1'; END",
+        "$fn$ LANGUAGE sql;",
+        "SELECT 2;",
+    ];
+    let ranges = find_all_statement_ranges(&lines);
+    assert_eq!(ranges, vec![(0, 2), (3, 3)]);
+}
+
+#[test]
 fn test_all_ranges_with_cte_consumes_following_select() {
     let lines = ["WITH c AS (SELECT 1) SELECT * FROM c;", "SELECT 2;"];
     let ranges = find_all_statement_ranges(&lines);

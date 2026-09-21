@@ -113,19 +113,7 @@ pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
             }
             // Single-quoted string
             b'\'' => {
-                i += 1;
-                while i < n {
-                    if bytes[i] == b'\'' {
-                        i += 1;
-                        // Handle escaped single-quote ''
-                        if i < n && bytes[i] == b'\'' {
-                            i += 1; // skip second quote of ''
-                            continue;
-                        }
-                        break;
-                    }
-                    i += 1;
-                }
+                i = scan_quoted(bytes, i, b'\'');
                 tokens.push(Token {
                     kind: TokenKind::StrLit,
                     start,
@@ -134,13 +122,7 @@ pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
             }
             // Double-quoted identifier
             b'"' => {
-                i += 1;
-                while i < n && bytes[i] != b'"' {
-                    i += 1;
-                }
-                if i < n {
-                    i += 1;
-                }
+                i = scan_quoted(bytes, i, b'"');
                 tokens.push(Token {
                     kind: TokenKind::QuotedIdent,
                     start,
@@ -149,35 +131,27 @@ pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
             }
             // Backtick-quoted identifier (MySQL)
             b'`' => {
-                i += 1;
-                while i < n && bytes[i] != b'`' {
-                    i += 1;
-                }
-                if i < n {
-                    i += 1;
-                }
+                i = scan_quoted(bytes, i, b'`');
                 tokens.push(Token {
                     kind: TokenKind::QuotedIdent,
                     start,
                     end: i,
                 });
             }
-            // Dollar-quoted string ($$...$$)
-            b'$' if i + 1 < n && bytes[i + 1] == b'$' => {
-                i += 2;
-                while i + 1 < n && !(bytes[i] == b'$' && bytes[i + 1] == b'$') {
+            // Dollar-quoted string ($$…$$ or $tag$…$tag$)
+            b'$' => {
+                if let Some(end) = scan_dollar_quote(bytes, i) {
+                    i = end;
+                    tokens.push(Token {
+                        kind: TokenKind::DollarStr,
+                        start,
+                        end: i,
+                    });
+                } else {
+                    // `$1`, `$name` without a closing `$` — a parameter
+                    // placeholder or an ordinary character, not a string.
                     i += 1;
                 }
-                if i + 1 < n {
-                    i += 2;
-                } else {
-                    i = n;
-                }
-                tokens.push(Token {
-                    kind: TokenKind::DollarStr,
-                    start,
-                    end: i,
-                });
             }
             // @ directive (capture @ + following identifier as a single token)
             b'@' => {
@@ -333,6 +307,72 @@ pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
     }
 
     tokens
+}
+
+// ---------------------------------------------------------------------------
+// Quoted-run scanners
+// ---------------------------------------------------------------------------
+
+/// Scan a run quoted by `quote`, starting at its opening character. A doubled
+/// quote (`''`, `""`, ` `` `) is that character escaped, not a terminator, so
+/// `'it''s'` and `"my""table"` are each one run. An unterminated run ends at
+/// the end of the input; returns the index just past the closing quote.
+fn scan_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let n = bytes.len();
+    let mut i = start + 1;
+    while i < n {
+        if bytes[i] == quote {
+            i += 1;
+            if i < n && bytes[i] == quote {
+                i += 1;
+                continue;
+            }
+            return i;
+        }
+        i += 1;
+    }
+    i
+}
+
+/// If the `$` at `start` opens a Postgres dollar quote (`$$`, or `$tag$` with
+/// `tag` matching `[A-Za-z_][A-Za-z0-9_]*`), return the index just past the
+/// matching closing delimiter; a body with no closing delimiter runs to the end
+/// of the input, which is how `sql_parser::split_statements` reads it too.
+/// `None` means this `$` opens nothing — a `$1`-style placeholder, or a tag
+/// whose closing `$` is missing — and is tokenized as an ordinary character.
+///
+/// The tag grammar is deliberately the splitter's and not wider: the two
+/// scanners answer questions about the same text (what is one statement, where
+/// does this string end), and a rule they disagree on is a bug that only shows
+/// up in the editor.
+fn scan_dollar_quote(bytes: &[u8], start: usize) -> Option<usize> {
+    let n = bytes.len();
+    let mut j = start + 1;
+    if bytes.get(j) == Some(&b'$') {
+        j += 1;
+    } else if matches!(bytes.get(j), Some(&c) if c.is_ascii_alphabetic() || c == b'_') {
+        j += 1;
+        while matches!(bytes.get(j), Some(&c) if c.is_ascii_alphanumeric() || c == b'_') {
+            j += 1;
+        }
+        if bytes.get(j) != Some(&b'$') {
+            return None;
+        }
+        j += 1;
+    } else {
+        return None;
+    }
+    let delim = &bytes[start..j];
+    let mut k = j;
+    while k < n {
+        let found = bytes[k..].iter().position(|&b| b == b'$')?;
+        k += found;
+        if bytes.len() - k >= delim.len() && &bytes[k..k + delim.len()] == delim {
+            return Some(k + delim.len());
+        }
+        k += 1;
+    }
+    Some(n)
 }
 
 // ---------------------------------------------------------------------------
@@ -723,5 +763,79 @@ mod tests {
                 kw,
             );
         }
+    }
+
+    fn kinds(src: &str) -> Vec<TokenKind> {
+        tokenize(src).into_iter().map(|t| t.kind).collect()
+    }
+
+    fn quoted_spans(src: &str) -> Vec<(TokenKind, String)> {
+        tokenize(src)
+            .into_iter()
+            .filter(|t| {
+                matches!(
+                    t.kind,
+                    TokenKind::StrLit | TokenKind::DollarStr | TokenKind::QuotedIdent
+                )
+            })
+            .map(|t| (t.kind.clone(), t.text(src).to_string()))
+            .collect()
+    }
+
+    /// `$tag$ … $tag$` is the usual spelling of a function or DO-block body, and
+    /// the splitter (`sql_parser::split_statements`) has read tags for a while.
+    /// Reading only `$$` here meant a body's quotes and semicolons leaked into
+    /// the token stream: everything after an odd `'` inside the body became one
+    /// string, so completion, the table list and `context stmt`'s line range all
+    /// ran off the end of the block.
+    #[test]
+    fn tagged_dollar_quote_is_one_token() {
+        let src = "SELECT $fn$ BEGIN 'x; END $fn$ AS body FROM t";
+        assert_eq!(
+            quoted_spans(src),
+            vec![(TokenKind::DollarStr, "$fn$ BEGIN 'x; END $fn$".to_string())],
+            "the body must be one token, its `'` and `;` are content"
+        );
+    }
+
+    /// A bare `$` is not a tag: `$1` is a parameter placeholder and `$` alone
+    /// ends the input. Both must stay out of string mode, or the *whole* rest of
+    /// the buffer is treated as a literal and completion stops working.
+    #[test]
+    fn non_tags_stay_out_of_dollar_string() {
+        assert_eq!(
+            quoted_spans("SELECT $1, $fn$ a $fn$ FROM t"),
+            vec![(TokenKind::DollarStr, "$fn$ a $fn$".to_string())]
+        );
+        assert!(
+            !kinds("SELECT $ FROM t").contains(&TokenKind::DollarStr),
+            "a lone `$` is not an opener"
+        );
+        assert!(
+            !kinds("SELECT $a FROM t").contains(&TokenKind::DollarStr),
+            "an unterminated tag is not an opener"
+        );
+    }
+
+    /// `""` and ``` `` ``` are how a quote character is written inside a quoted
+    /// identifier (`"my""table"` names the table `my"table`), exactly like `''`
+    /// inside a string — which this tokenizer already handled. Stopping at the
+    /// first inner quote split one identifier into two tokens and re-opened at
+    /// the next, so the name the completion lookup asks for was wrong and the
+    /// tokens after it were shifted by one quote.
+    #[test]
+    fn doubled_quotes_stay_inside_the_identifier() {
+        assert_eq!(
+            quoted_spans("SELECT * FROM \"my\"\"table\" WHERE a = 1"),
+            vec![(TokenKind::QuotedIdent, "\"my\"\"table\"".to_string())]
+        );
+        assert_eq!(
+            quoted_spans("SELECT * FROM `a``b` WHERE a = 1"),
+            vec![(TokenKind::QuotedIdent, "`a``b`".to_string())]
+        );
+        assert_eq!(
+            quoted_spans("SELECT 'it''s' AS x"),
+            vec![(TokenKind::StrLit, "'it''s'".to_string())]
+        );
     }
 }
