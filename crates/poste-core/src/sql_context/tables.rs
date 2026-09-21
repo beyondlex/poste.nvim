@@ -1,30 +1,13 @@
-//! Table reference extraction from a token stream.
+//! Table reference parsing for one token position.
 //!
-//! Supports schema-qualified tables (`schema.table`), aliases, and
-//! paren-depth tracking to skip subquery-internal table references.
-//!
-//! Compatibility layer: `extract_tables()` now delegates to `scope::resolve_scope()`.
+//! Supports schema-qualified tables (`schema.table`, `db.schema.table`) and
+//! aliases. Scope tracking (which of those references the cursor can actually
+//! see) lives in `scope::resolve_scope_at`.
 
-use super::scope;
 use super::tokenizer::{
     is_column_keyword, is_known_keyword, is_predicate_keyword, is_table_keyword,
 };
 use super::tokenizer::{kw_eq, skip_forward, Token, TokenKind};
-use super::TableRef;
-
-// ---------------------------------------------------------------------------
-// Table extraction (delegates to scope resolver)
-// ---------------------------------------------------------------------------
-
-/// Extract table references from a token stream.
-///
-/// Delegates to `scope::resolve_scope()` for full scope-aware extraction
-/// including CTE registration and derived table aliases.
-/// Returns `Vec<TableRef>` for backward compatibility.
-#[allow(dead_code)]
-pub(crate) fn extract_tables(tokens: &[Token], sql: &str) -> Vec<TableRef> {
-    scope::resolve_scope(tokens, sql).tables
-}
 
 /// Parse a table reference starting at token index `i`.
 /// Returns (schema, table_name, alias, tokens_consumed).

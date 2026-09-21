@@ -2028,3 +2028,39 @@ fn test_detect_dollar_tagged_body_keeps_the_block_after_it() {
     assert_eq!(ctx.context_type, ContextType::Column);
     assert!(ctx.tables.iter().any(|t| t.name == "t"));
 }
+
+// ---- Cursor-aware table scope ----
+
+#[test]
+fn test_cursor_in_subquery_completes_against_its_own_table() {
+    let sql = "SELECT * FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE ";
+    let result = detect_context(sql, sql.len()).unwrap();
+    assert_eq!(result.context_type, ContextType::Column);
+    let names: Vec<&str> = result.tables.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"orders"), "got {names:?}");
+    assert_eq!(
+        names.first().copied(),
+        Some("orders"),
+        "the cursor's own query block leads, got {names:?}"
+    );
+}
+
+#[test]
+fn test_cursor_outside_a_subquery_does_not_see_its_tables() {
+    let sql = "SELECT * FROM users WHERE EXISTS (SELECT 1 FROM orders) AND ";
+    let result = detect_context(sql, sql.len()).unwrap();
+    let names: Vec<&str> = result.tables.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"users"), "got {names:?}");
+    assert!(
+        !names.contains(&"orders"),
+        "leaked a closed subquery: {names:?}"
+    );
+}
+
+#[test]
+fn test_cursor_in_cte_body_completes_against_the_cte_source() {
+    let sql = "WITH o AS (SELECT * FROM orders WHERE ";
+    let result = detect_context(sql, sql.len()).unwrap();
+    let names: Vec<&str> = result.tables.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"orders"), "got {names:?}");
+}

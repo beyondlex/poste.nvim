@@ -72,7 +72,13 @@ pub fn detect_context_with_dialect(
     let (stmt_start, stmt_end) = statements::find_statement_token_range(&tokens, cursor_idx, sql);
     let stmt_tokens = &tokens[stmt_start..stmt_end];
 
-    let scope = scope::resolve_scope(stmt_tokens, sql);
+    // Scope by the cursor's query block, not the whole statement: inside a
+    // subquery the inner FROM list is what the completion menu needs.
+    let scope = scope::resolve_scope_at(
+        stmt_tokens,
+        sql,
+        Some(cursor_idx.saturating_sub(stmt_start)),
+    );
     let tables = scope.tables;
     let functions = functions::known_functions_for_dialect(dialect);
 

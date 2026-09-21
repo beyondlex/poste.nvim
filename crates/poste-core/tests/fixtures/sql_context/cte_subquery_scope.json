@@ -57,6 +57,7 @@
       "ctx_schema": null,
       "prefix": "",
       "tables": [
+        { "name": "orders", "alias": null, "schema": null },
         { "name": "users", "alias": null, "schema": null }
       ],
       "in_string": false,
