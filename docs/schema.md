@@ -11,10 +11,12 @@ compatibility contract: a change here is a breaking change for every sibling
 and must ship as a binary MAJOR (or be additive).
 
 Siblings resolve the binary via their vendored `find_poste_binary()`:
-`vim.g.poste_binary` → their own `config.poste_binary` (default
-`stdpath("data")/poste/bin/poste`, managed by the vendored installer, which
-still downloads from THIS repo's releases) → `target/{debug,release}/poste`
-next to cwd or the plugin dir → `poste` on PATH.
+`vim.g.poste_binary` → `$POSTE_BINARY` → their own `config.poste_binary`
+(default `stdpath("data")/poste/bin/poste`, managed by the vendored installer,
+which still downloads from THIS repo's releases) →
+`target/{debug,release}/poste` next to cwd or the plugin dir → `poste` on
+PATH. It returns the path *and* which of those answered; see Global
+conventions.
 
 ## Global conventions
 
@@ -29,13 +31,29 @@ next to cwd or the plugin dir → `poste` on PATH.
   resolved parameters.
 - `poste --version` prints `poste <tag> (<build-date>)`; siblings' health
   checks display it. Record the version you tested against there.
+- **Invoke the binary as argv, never as a command line.** Its path comes from
+  user config (`vim.g.poste_binary`, `$POSTE_BINARY`), so anything that
+  interpolates it into a shell string lets metacharacters in that path run
+  commands: `io.popen('"' .. bin .. '" --version 2>/dev/null')` breaks on a
+  `"` and executes `$(…)` (both reproduced with a headless probe), and the
+  redirect is POSIX-only. Use `vim.system({ bin, "--version" })` /
+  `jobstart(argv)`. One exception to know about:
+  `vim.fn.system({ "powershell", "-Command", … })` is argv-safe but PowerShell
+  **joins and re-parses everything after `-Command` as a command line**, so
+  paths embedded there need `install.ps_literal()` — single quotes, with `'`
+  doubled (a `stdpath("data")` under `C:\Users\Jane Smith\` is otherwise split
+  at the space).
 - **Locating the binary is one Lua function per sibling**, never one per call
   site: `state.find_poste_binary()` tries `vim.g.poste_binary`, then
   `$POSTE_BINARY`, then the configured install path
   (`stdpath("data")/poste/bin/poste`), then dev builds (CWD and next to the
   plugin, incl. `bin/poste`), then `$PATH`, and a candidate must be **both
-  readable and executable**. The startup check that downloads a release
-  (`install.ensure()`) asks that function instead of repeating the walk — a
+  readable and executable**. It returns `(path, source)` and the diagnostics
+  print the source (`:PosteDbInfo` / `:PosteRedisInfo`, checkhealth), because
+  the install path outranks `$PATH` and "why is my own build not being used"
+  has to be answerable without reading the lookup. The startup check that
+  downloads a release (`install.ensure()`) asks that function instead of
+  repeating the walk — a
   second copy there silently disables `$POSTE_BINARY`/`$PATH` installs,
   because the downloaded copy at the install path outranks `$PATH`.
 
