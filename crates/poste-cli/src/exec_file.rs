@@ -335,14 +335,12 @@ where
     }
 
     let total_ms = total_start.elapsed().as_millis() as u64;
-    let dialect = match protocol {
-        poste_core::Protocol::Postgres => "postgres",
-        poste_core::Protocol::Mysql => "mysql",
-        poste_core::Protocol::Mssql => "mssql",
-        poste_core::Protocol::ClickHouse => "clickhouse",
-        poste_core::Protocol::Sqlite => "sqlite",
-        _ => "unknown",
-    };
+    // The label comes from the dialect table itself rather than a copy of it
+    // here: the summary's `dialect` is what the Lua side keys its rendering
+    // on, and a name added to one list only makes the two disagree quietly.
+    let dialect = poste_exec::sql_dialect::dialect_for(protocol)
+        .map(|d| d.name().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
 
     Ok(ExecSummary {
         total,
