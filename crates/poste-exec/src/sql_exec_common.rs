@@ -44,12 +44,21 @@ pub const MYSQL_QUERY: QueryKinds = QueryKinds {
 /// comments removed first, so `'returning'` inside a value cannot flip DML
 /// onto the fetch path, and a leading `/* hint */` cannot hide SELECT from
 /// the prefix match (the comment view's doc has both regressions).
+///
+/// `contains` matches whole words only: `UPDATE orders SET returning_flag = 1`
+/// is a DML statement, but a substring test read its column name as the
+/// RETURNING clause and took the fetch branch — the statement still ran, yet
+/// its result came back as "0 rows" instead of the affected count.
 pub fn is_query_with(kinds: &QueryKinds, stmt: &str) -> bool {
     let upper = poste_core::sql_parser::blank_literals_and_comments(stmt)
         .trim_start()
         .to_uppercase();
     kinds.starts_with.iter().any(|p| upper.starts_with(p))
-        || kinds.contains.iter().any(|w| upper.contains(w))
+        || kinds.contains.iter().any(|w| {
+            upper
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|token| token == *w)
+        })
 }
 
 /// True for statements that must be skipped silently (empty, `USE` — the
@@ -359,6 +368,35 @@ mod tests {
         assert!(is_query_with(
             &POSTGRES_QUERY,
             "UPDATE t SET a = 1 /* note */ RETURNING id"
+        ));
+    }
+
+    #[test]
+    fn returning_matches_as_a_word() {
+        // A column whose name embeds the keyword is still plain DML: reading
+        // it as a RETURNING clause sent the statement down the fetch branch,
+        // which ran it but reported "0 rows" with no affected count.
+        assert!(!is_query_with(
+            &POSTGRES_QUERY,
+            "UPDATE orders SET returning_flag = 1 WHERE id = 2"
+        ));
+        assert!(!is_query_with(
+            &MYSQL_QUERY,
+            "DELETE FROM t WHERE returning_count > 0"
+        ));
+        assert!(!is_query_with(
+            &SQLITE_QUERY,
+            "INSERT INTO returning_log (a) VALUES (1)"
+        ));
+        // the real clause, in every spacing it arrives in
+        assert!(is_query_with(
+            &POSTGRES_QUERY,
+            "UPDATE orders SET returning_flag = 1 RETURNING returning_flag"
+        ));
+        assert!(is_query_with(&SQLITE_QUERY, "DELETE FROM t RETURNING *"));
+        assert!(is_query_with(
+            &POSTGRES_QUERY,
+            "INSERT INTO t (a) VALUES (1) RETURNING id;"
         ));
     }
 
