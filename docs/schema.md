@@ -29,6 +29,15 @@ next to cwd or the plugin dir → `poste` on PATH.
   resolved parameters.
 - `poste --version` prints `poste <tag> (<build-date>)`; siblings' health
   checks display it. Record the version you tested against there.
+- **Locating the binary is one Lua function per sibling**, never one per call
+  site: `state.find_poste_binary()` tries `vim.g.poste_binary`, then
+  `$POSTE_BINARY`, then the configured install path
+  (`stdpath("data")/poste/bin/poste`), then dev builds (CWD and next to the
+  plugin, incl. `bin/poste`), then `$PATH`, and a candidate must be **both
+  readable and executable**. The startup check that downloads a release
+  (`install.ensure()`) asks that function instead of repeating the walk — a
+  second copy there silently disables `$POSTE_BINARY`/`$PATH` installs,
+  because the downloaded copy at the install path outranks `$PATH`.
 
 ## Connection-name resolution (mirror implementations — do not drift alone)
 
