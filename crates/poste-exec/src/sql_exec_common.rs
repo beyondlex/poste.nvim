@@ -23,21 +23,28 @@ use std::future::Future;
 pub struct QueryKinds {
     pub starts_with: &'static [&'static str],
     pub contains: &'static [&'static str],
+    /// How this dialect reads a backslash inside a quoted literal — the same
+    /// rule the statement splitter uses, so a dump containing `'it\'s'`
+    /// classifies the way it executes.
+    pub escapes: poste_core::sql_parser::QuoteEscapes,
 }
 
 pub const SQLITE_QUERY: QueryKinds = QueryKinds {
     starts_with: &["SELECT", "WITH", "EXPLAIN", "PRAGMA", "VALUES"],
     contains: &["RETURNING"],
+    escapes: poste_core::sql_parser::QuoteEscapes::Standard,
 };
 
 pub const POSTGRES_QUERY: QueryKinds = QueryKinds {
     starts_with: &["SELECT", "WITH", "EXPLAIN", "SHOW", "TABLE ", "VALUES"],
     contains: &["RETURNING"],
+    escapes: poste_core::sql_parser::QuoteEscapes::Standard,
 };
 
 pub const MYSQL_QUERY: QueryKinds = QueryKinds {
     starts_with: &["SELECT", "WITH", "EXPLAIN", "SHOW", "DESCRIBE", "DESC "],
     contains: &["RETURNING"],
+    escapes: poste_core::sql_parser::QuoteEscapes::Backslash,
 };
 
 /// Classify one statement against `kinds`. String literals are blanked and
@@ -50,7 +57,7 @@ pub const MYSQL_QUERY: QueryKinds = QueryKinds {
 /// RETURNING clause and took the fetch branch — the statement still ran, yet
 /// its result came back as "0 rows" instead of the affected count.
 pub fn is_query_with(kinds: &QueryKinds, stmt: &str) -> bool {
-    let upper = poste_core::sql_parser::blank_literals_and_comments(stmt)
+    let upper = poste_core::sql_parser::blank_literals_and_comments_with(stmt, kinds.escapes)
         .trim_start()
         .to_uppercase();
     kinds.starts_with.iter().any(|p| upper.starts_with(p))
@@ -368,6 +375,29 @@ mod tests {
         assert!(is_query_with(
             &POSTGRES_QUERY,
             "UPDATE t SET a = 1 /* note */ RETURNING id"
+        ));
+    }
+
+    #[test]
+    fn mysql_reads_backslash_escapes_when_classifying() {
+        // mysqldump escapes an apostrophe as \' , which ended the blanked
+        // literal early and exposed the word `returning` from the row's own
+        // text — the UPDATE was then fetched for rows that never exist and
+        // its affected-count disappeared. Classification has to read quotes
+        // the way the splitter (and the server) did.
+        assert!(!is_query_with(
+            &MYSQL_QUERY,
+            r"UPDATE t SET note = 'it\'s returning' WHERE id = 1"
+        ));
+        // the escape is real MySQL text, so a genuine clause still counts
+        assert!(is_query_with(
+            &MYSQL_QUERY,
+            r"UPDATE t SET note = 'it\'s here' WHERE id = 1 RETURNING id"
+        ));
+        // and the standard dialects keep their own reading of the same bytes
+        assert!(!is_query_with(
+            &POSTGRES_QUERY,
+            r"UPDATE t SET note = 'plain text' WHERE id = 1"
         ));
     }
 

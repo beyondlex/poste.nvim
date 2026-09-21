@@ -23,7 +23,10 @@ pub struct SqlParseResult {
 /// so `{{var}}` references are already resolved.
 pub fn parse_sql_request(request: &Request) -> Result<SqlParseResult> {
     let database = extract_database(request.body_str());
-    let statements = split_statements(request.body_str());
+    let statements = split_statements_with(
+        request.body_str(),
+        QuoteEscapes::for_protocol(&request.protocol),
+    );
 
     Ok(SqlParseResult {
         connection: request.connection.clone(),
@@ -59,18 +62,57 @@ fn strip_directives(body: &str) -> String {
         .join("\n")
 }
 
+/// Whether a backslash escapes the next character inside a quoted literal.
+///
+/// MySQL and MariaDB do it in their default `sql_mode`, which is what
+/// `mysqldump` writes: `'it\'s'`. Every other dialect this tool drives takes
+/// a backslash literally, where `'C:\'` is a *complete* Windows-path string —
+/// so honouring `\` everywhere would unterminate valid Postgres SQL, while
+/// ignoring it for MySQL reads `\'` as the end of the literal and swallows
+/// every statement after it into one string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteEscapes {
+    /// `''` doubling only — the SQL-standard reading (postgres, sqlite,
+    /// mssql, clickhouse).
+    Standard,
+    /// `''` doubling *and* backslash escapes (MySQL/MariaDB default mode).
+    Backslash,
+}
+
+impl QuoteEscapes {
+    /// The reading a protocol's literals need. Aliases (`mariadb://`) are
+    /// already normalized to their base dialect upstream, so MySQL is the
+    /// only arm that is not Standard.
+    pub fn for_protocol(protocol: &crate::Protocol) -> Self {
+        match protocol {
+            crate::Protocol::Mysql => Self::Backslash,
+            _ => Self::Standard,
+        }
+    }
+}
+
+/// Split with [`QuoteEscapes::Standard`]. See [`split_statements_with`].
+pub fn split_statements(body: &str) -> Vec<String> {
+    split_statements_with(body, QuoteEscapes::Standard)
+}
+
 /// Split SQL body into individual statements by semicolons.
 ///
 /// Handles:
 /// - Semicolons inside single-quoted strings (`'it''s; a test'`)
 /// - Semicolons inside double-quoted identifiers (`"col;name"`)
+/// - Semicolons inside backtick-quoted identifiers (`` `col;name` ``, the
+///   MySQL/ClickHouse spelling; sqlite accepts it too and no dialect this tool
+///   serves uses a bare backtick, so honouring it can only help)
 /// - Semicolons inside Postgres dollar-quoted bodies (`$$...;...$$`,
 ///   `$fn$...;...$fn$`) — function/DO-block bodies routinely contain `;`
 /// - Semicolons inside `--` line comments
 /// - Semicolons inside `/* */` block comments
-/// - Escaped quotes (`''` inside strings, `""` inside identifiers)
+/// - Escaped quotes (`''` inside strings, `""` inside identifiers), plus `\'`
+///   and `` \` `` when `escapes` is [`QuoteEscapes::Backslash`]
 /// - Empty statements are filtered out
-pub fn split_statements(body: &str) -> Vec<String> {
+pub fn split_statements_with(body: &str, escapes: QuoteEscapes) -> Vec<String> {
+    let backslash = escapes == QuoteEscapes::Backslash;
     let cleaned = strip_directives(body);
     let mut statements = Vec::new();
     let mut current = String::new();
@@ -78,44 +120,36 @@ pub fn split_statements(body: &str) -> Vec<String> {
 
     while let Some(c) = chars.next() {
         match c {
-            // Single-quoted string literal
-            '\'' => {
+            // Quoted literal or identifier: ' " ` — each ends at its own
+            // delimiter, doubled for escaping, with backslash escapes added
+            // for the MySQL family.
+            '\'' | '"' | '`' => {
+                let quote = c;
                 current.push(c);
                 // Consume until closing quote (handle '' escapes)
                 loop {
                     match chars.next() {
-                        Some('\'') => {
-                            current.push('\'');
+                        Some('\\') if backslash => {
+                            // One escaped character, not the end of the
+                            // literal: consume the pair whole.
+                            current.push('\\');
+                            match chars.next() {
+                                Some(escaped) => current.push(escaped),
+                                None => break, // trailing backslash
+                            }
+                        }
+                        Some(ch) if ch == quote => {
+                            current.push(ch);
                             // Check for escaped quote ''
-                            if chars.peek() == Some(&'\'') {
-                                current.push(chars.next().expect("peek confirmed quote exists"));
+                            if chars.peek() == Some(&quote) {
+                                let second = chars.next();
+                                current.push(second.expect("peek confirmed quote exists"));
                             } else {
                                 break;
                             }
                         }
                         Some(ch) => current.push(ch),
                         None => break, // Unterminated string
-                    }
-                }
-            }
-            // Double-quoted identifier
-            '"' => {
-                current.push(c);
-                loop {
-                    match chars.next() {
-                        Some('"') => {
-                            current.push('"');
-                            // Check for escaped quote ""
-                            if chars.peek() == Some(&'"') {
-                                current.push(
-                                    chars.next().expect("peek confirmed double-quote exists"),
-                                );
-                            } else {
-                                break;
-                            }
-                        }
-                        Some(ch) => current.push(ch),
-                        None => break,
                     }
                 }
             }
@@ -231,22 +265,30 @@ pub fn split_statements(body: &str) -> Vec<String> {
 ///
 /// Same length in characters as the input (literals become spaces), so
 /// offsets are stable. Handles single-quoted strings and double-quoted
-/// identifiers with doubled-quote escapes (`''`, `""`), and Postgres
-/// dollar-quoted strings (`$$...$$`, `$tag$...$tag$`). Backslash escapes
-/// (`\'`) are intentionally NOT interpreted: this is a heuristic view, not a
-/// parser, and the worst case (MySQL `\'` ends the blanked run early)
-/// degrades to the pre-fix behavior for that one statement.
+/// identifiers with doubled-quote escapes (`''`, `""`), backtick-quoted
+/// identifiers, and Postgres dollar-quoted strings (`$$...$$`,
+/// `$tag$...$tag$`). This is the [`QuoteEscapes::Standard`] reading; the
+/// MySQL family needs [`blank_string_literals_with`] so `\'` inside dumped
+/// data does not end the blanked run early.
 pub fn blank_string_literals(stmt: &str) -> String {
+    blank_string_literals_with(stmt, QuoteEscapes::Standard)
+}
+
+/// [`blank_string_literals`] with the dialect's quote-escape reading.
+pub fn blank_string_literals_with(stmt: &str, escapes: QuoteEscapes) -> String {
+    let backslash = escapes == QuoteEscapes::Backslash;
     let chars: Vec<char> = stmt.chars().collect();
     let mut out = vec![' '; chars.len()];
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        if c == '\'' || c == '"' {
+        if c == '\'' || c == '"' || c == '`' {
             out[i] = ' ';
             i += 1;
             while i < chars.len() {
-                if chars[i] == c {
+                if chars[i] == '\\' && backslash {
+                    i += 2; // escaped character — still inside the literal
+                } else if chars[i] == c {
                     if i + 1 < chars.len() && chars[i + 1] == c {
                         i += 2; // doubled quote — still inside the literal
                     } else {
@@ -319,7 +361,12 @@ pub fn blank_string_literals(stmt: &str) -> String {
 /// them. Applied after `blank_string_literals`, so `/*` or `--` inside a
 /// literal cannot open a fake comment.
 pub fn blank_literals_and_comments(stmt: &str) -> String {
-    let blanked = blank_string_literals(stmt);
+    blank_literals_and_comments_with(stmt, QuoteEscapes::Standard)
+}
+
+/// [`blank_literals_and_comments`] with the dialect's quote-escape reading.
+pub fn blank_literals_and_comments_with(stmt: &str, escapes: QuoteEscapes) -> String {
+    let blanked = blank_string_literals_with(stmt, escapes);
     let mut out = String::with_capacity(blanked.len());
     let mut chars = blanked.chars().peekable();
     while let Some(c) = chars.next() {
@@ -450,6 +497,64 @@ mod tests {
     fn test_split_escaped_quotes() {
         let stmts = split_statements("SELECT 'it''s; a test'; SELECT 2;");
         assert_eq!(stmts, vec!["SELECT 'it''s; a test'", "SELECT 2"]);
+    }
+
+    #[test]
+    fn test_split_mysql_backslash_escapes() {
+        use QuoteEscapes::Backslash;
+        // mysqldump writes an apostrophe in data as \' inside single quotes.
+        // Ending the literal there opened a NEW string at the one after
+        // `here`, so the `;` landed inside it and every statement to the end
+        // of the file was executed as one.
+        assert_eq!(
+            split_statements_with(r"INSERT INTO t VALUES ('it\'s here'); SELECT 2;", Backslash),
+            vec![r"INSERT INTO t VALUES ('it\'s here')", "SELECT 2"]
+        );
+        // `\\` escapes the backslash itself, so the next quote really closes
+        assert_eq!(
+            split_statements_with(r"INSERT INTO t VALUES ('a\\'); SELECT 2;", Backslash),
+            vec![r"INSERT INTO t VALUES ('a\\')", "SELECT 2"]
+        );
+        // a body ending on an escape must not panic or lose the statement
+        assert_eq!(
+            split_statements_with(r#"SELECT 'a\"#, Backslash),
+            vec![r#"SELECT 'a\"#]
+        );
+    }
+
+    #[test]
+    fn test_split_other_dialects_take_backslash_literally() {
+        // Postgres, sqlite, mssql and clickhouse read \'C:\\' as a complete
+        // string (a Windows path). Honouring the MySQL escape for them would
+        // unterminate that literal and swallow the statements after it — the
+        // same failure in the other direction, so the rule is per-dialect.
+        assert_eq!(
+            split_statements(r"SELECT 'C:\'; SELECT 2;"),
+            vec![r"SELECT 'C:\'", "SELECT 2"]
+        );
+        assert_eq!(
+            split_statements_with(r"SELECT 'C:\'; SELECT 2;", QuoteEscapes::Standard),
+            vec![r"SELECT 'C:\'", "SELECT 2"]
+        );
+        // and the MySQL reading of that same text is one unterminated literal
+        assert_eq!(
+            split_statements_with(r"SELECT 'C:\'; SELECT 2;", QuoteEscapes::Backslash),
+            vec![r"SELECT 'C:\'; SELECT 2;"]
+        );
+    }
+
+    #[test]
+    fn test_split_semicolon_in_backtick_identifier() {
+        // The MySQL/ClickHouse (and sqlite-compat) identifier quote: not
+        // knowing it split `SELECT `a;b` FROM t` down the middle.
+        assert_eq!(
+            split_statements("SELECT `a;b` FROM t; SELECT 2;"),
+            vec!["SELECT `a;b` FROM t", "SELECT 2"]
+        );
+        assert_eq!(
+            split_statements("SELECT `it``s;` FROM t; SELECT 2;"),
+            vec!["SELECT `it``s;` FROM t", "SELECT 2"]
+        );
     }
 
     #[test]

@@ -78,7 +78,10 @@ where
 
     // Parse SQL statements directly from file content (strip -- @... directives)
     let body = strip_sql_directives(&content);
-    let all_statements = poste_core::sql_parser::split_statements(&body);
+    let all_statements = poste_core::sql_parser::split_statements_with(
+        &body,
+        poste_core::sql_parser::QuoteEscapes::for_protocol(&protocol),
+    );
 
     if all_statements.is_empty() {
         anyhow::bail!("No SQL statements found in file");
