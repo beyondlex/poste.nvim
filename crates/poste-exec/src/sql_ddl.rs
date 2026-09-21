@@ -50,7 +50,7 @@ pub trait DdlGenerator {
 /// MySQL's `create_table` appends them inline, Postgres' emits `COMMENT ON`
 /// statements, SQLite/MSSQL/ClickHouse ignore them. A caller that forgets
 /// drops them silently, which is why the ALTER-style members below are not
-/// wired to any production path (see docs/REVIEW-2026-09-21.md).
+/// wired to any production path (see REVIEW-2026-09-21.md).
 fn column_def_sql(col: &ColumnDef, quote: &dyn Fn(&str) -> String) -> String {
     let mut s = format!("{} {}", quote(&col.name), col.col_type);
     if !col.nullable {
