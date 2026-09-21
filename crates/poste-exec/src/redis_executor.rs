@@ -33,7 +33,7 @@ pub fn validate_connection_url(url: &str) -> Result<()> {
     } else {
         Err(anyhow::anyhow!(
             "Not a redis connection URL (expected redis:// or rediss://): {}",
-            url
+            poste_core::mask_url_password(url)
         ))
     }
 }
@@ -183,8 +183,8 @@ fn hex_preview(bytes: &[u8], limit: usize) -> String {
 
 /// Convert a redis reply into the structured JSON shape consumed by the
 /// Lua side:
-/// - strings carry `parsed` when the payload itself is valid JSON, plus
-///   `len`/`truncated` beyond `max_bytes`
+/// - strings carry `parsed` when the payload itself is valid JSON and fits
+///   `max_bytes`, plus `len`/`truncated` beyond it
 /// - non-UTF-8 payloads become `{"type":"binary","encoding":"hex",...}`
 /// - arrays infer list/set/hash/zset/stream from the command (HGETALL &
 ///   friends → `entries` pairs); `len`/`truncated` beyond `max_items`
@@ -226,9 +226,16 @@ pub fn redis_value_to_json(
                     if truncated {
                         obj["truncated"] = json!(true);
                     }
-                    // Heuristic: surface parsed JSON alongside the raw string
-                    if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-                        obj["parsed"] = parsed;
+                    // Heuristic: surface parsed JSON alongside the raw string —
+                    // only for a value that fit the cap. Re-emitting `parsed`
+                    // for a truncated value writes the whole document back out
+                    // anyway, which is exactly what `max_bytes` exists to bound
+                    // (the Lua side reads line-delimited JSON and a 50 MB
+                    // document starves the job's stdout).
+                    if !truncated {
+                        if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                            obj["parsed"] = parsed;
+                        }
                     }
                     obj
                 }
@@ -448,6 +455,21 @@ mod tests {
         assert_eq!(out["parsed"], json!({"a": 1}));
         assert_eq!(out["len"], 8);
         assert!(out.get("truncated").is_none());
+    }
+
+    #[test]
+    fn truncated_json_loses_the_parsed_field() {
+        // The cap is what keeps a huge value off stdout; re-serialising the
+        // whole document through `parsed` silently removed it again.
+        let raw = format!(r#"{{"a":"{}"}}"#, "x".repeat(400)).into_bytes();
+        let out = redis_value_to_json(&redis::Value::BulkString(raw), "GET", 100, 64);
+        assert_eq!(out["truncated"], json!(true));
+        assert_eq!(out["len"], 408);
+        assert!(
+            out.get("parsed").is_none(),
+            "truncated reply must not carry the full document: {out}"
+        );
+        assert_eq!(out["value"].as_str().unwrap().len(), 64);
     }
 
     #[test]
