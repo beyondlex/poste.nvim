@@ -2064,3 +2064,62 @@ fn test_cursor_in_cte_body_completes_against_the_cte_source() {
     let names: Vec<&str> = result.tables.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"orders"), "got {names:?}");
 }
+
+// ---- Set operations are one statement ----
+
+#[test]
+fn test_ranges_keep_union_arms_in_one_statement() {
+    let lines = [
+        "SELECT a FROM x",
+        "UNION ALL",
+        "SELECT b FROM y;",
+        "SELECT 1;",
+    ];
+    assert_eq!(find_all_statement_ranges(&lines), vec![(0, 2), (3, 3)]);
+}
+
+#[test]
+fn test_span_keeps_union_arms_in_one_statement() {
+    let lines = ["SELECT a FROM x", "UNION", "SELECT b FROM y"];
+    for cursor in 0..3 {
+        assert_eq!(
+            find_statement_span(&lines, cursor),
+            Some((0, 2)),
+            "cursor on line {cursor} must select the whole UNION"
+        );
+    }
+}
+
+#[test]
+fn test_span_keeps_except_and_intersect_arms() {
+    let lines = [
+        "SELECT a FROM x EXCEPT SELECT b FROM y",
+        "UNION SELECT c FROM z;",
+    ];
+    assert_eq!(find_all_statement_ranges(&lines), vec![(0, 1)]);
+}
+
+#[test]
+fn test_union_arm_does_not_see_the_previous_arm_tables() {
+    // The statement is now one range, so the scope resolver has to keep the
+    // arms apart: `x` is not referenceable from the second branch.
+    let sql = "SELECT a FROM x UNION ALL SELECT b FROM y WHERE ";
+    let result = detect_context(sql, sql.len()).unwrap();
+    let names: Vec<&str> = result.tables.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"y"), "got {names:?}");
+    assert!(
+        !names.contains(&"x"),
+        "the previous arm leaked into this one: {names:?}"
+    );
+}
+
+#[test]
+fn test_cte_stays_visible_across_union_arms() {
+    let sql = "WITH c AS (SELECT 1) SELECT * FROM c UNION SELECT 2 WHERE ";
+    let result = detect_context(sql, sql.len()).unwrap();
+    let names: Vec<&str> = result.tables.iter().map(|t| t.name.as_str()).collect();
+    assert!(
+        names.contains(&"c"),
+        "a CTE belongs to the statement, not one arm: {names:?}"
+    );
+}

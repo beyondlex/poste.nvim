@@ -267,8 +267,7 @@
       "prefix": "",
       "tables": [
         { "name": "users", "alias": "u", "schema": null },
-        { "name": "orders", "alias": null, "schema": null },
-        { "name": "LATERAL", "alias": null, "schema": null }
+        { "name": "orders", "alias": null, "schema": null }
       ],
       "in_string": false,
       "in_comment": false

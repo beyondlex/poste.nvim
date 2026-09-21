@@ -235,9 +235,7 @@
       "ctx_data": null,
       "ctx_schema": null,
       "prefix": "",
-      "tables": [
-        { "name": "users", "alias": null, "schema": null }
-      ],
+      "tables": [],
       "in_string": false,
       "in_comment": false
     }
