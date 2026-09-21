@@ -34,6 +34,37 @@ async fn emit(stdout: &mut tokio::io::Stdout, ev: Value) -> Result<()> {
     Ok(())
 }
 
+/// The command tokens of a request, or the reason it cannot be run.
+///
+/// Two rules, and both are about what the caller is still waiting for:
+///
+/// * Every element must be a string. The old `filter_map(as_str)` *dropped*
+///   non-string elements instead, so `["SET","k",5]` ran `SET k` — a wrong
+///   write with a plausible-looking echo — and `["SCAN",123,…]` resumed a
+///   scan from the wrong cursor. poste-redis stringifies every token today, so
+///   this is a loud rejection of a mistake, not a change in normal traffic.
+/// * An empty command is an error, not a skipped line. `session_conn.execute`
+///   registers a pending callback for the seq *before* sending and only
+///   restarts a session when a pending entry goes unanswered, so a request
+///   answered with nothing hangs its caller until the stall watchdog fires.
+fn request_tokens(req: &Value) -> std::result::Result<Vec<String>, String> {
+    let tokens = match req.get("command").and_then(|v| v.as_array()) {
+        Some(tokens) => tokens,
+        None => return Err("request has no \"command\" array".to_string()),
+    };
+    let mut out = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        match token.as_str() {
+            Some(s) => out.push(s.to_string()),
+            None => return Err("command tokens must be strings".to_string()),
+        }
+    }
+    if out.is_empty() {
+        return Err("empty command".to_string());
+    }
+    Ok(out)
+}
+
 pub async fn execute(args: RedisSessionArgs) -> Result<()> {
     use poste_exec::redis_executor::execute_command_on;
 
@@ -71,18 +102,14 @@ pub async fn execute(args: RedisSessionArgs) -> Result<()> {
             }
         };
         let seq = req.get("seq").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-        let tokens: Vec<String> = req
-            .get("command")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|t| t.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if tokens.is_empty() {
-            continue;
-        }
+        let tokens = match request_tokens(&req) {
+            Ok(tokens) => tokens,
+            Err(msg) => {
+                let err = json!({"type":"result","seq":seq,"status":"error","error":msg});
+                emit(&mut stdout, err).await?;
+                continue;
+            }
+        };
 
         let max_items = args.max_items as usize;
         let max_bytes = args.max_bytes as usize;
@@ -163,4 +190,47 @@ pub async fn execute(args: RedisSessionArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tokens_of(line: &str) -> std::result::Result<Vec<String>, String> {
+        request_tokens(&serde_json::from_str(line).expect("request json"))
+    }
+
+    #[test]
+    fn string_tokens_pass_through_in_order() {
+        assert_eq!(
+            tokens_of(r#"{"seq":1,"command":["SET","k","v","EX","60"]}"#).unwrap(),
+            vec!["SET", "k", "v", "EX", "60"]
+        );
+    }
+
+    #[test]
+    fn a_request_without_a_usable_command_is_an_error() {
+        assert!(tokens_of(r#"{"seq":1}"#).is_err(), "no command key");
+        assert!(
+            tokens_of(r#"{"seq":1,"command":"GET k"}"#).is_err(),
+            "a string is not a token list: splitting it here would run a command \
+             the parser never tokenised"
+        );
+        assert!(
+            tokens_of(r#"{"seq":1,"command":[]}"#).is_err(),
+            "an empty command still needs a reply, or the caller's pending \
+             callback never fires and the stall watchdog restarts a healthy session"
+        );
+    }
+
+    #[test]
+    fn non_string_tokens_are_rejected_not_dropped() {
+        // ["SET","k",5] used to run `SET k`, and ["SCAN",123,"COUNT","500"]
+        // used to run `SCAN COUNT 500` from the wrong cursor.
+        let err = tokens_of(r#"{"seq":1,"command":["SET","k",5]}"#).unwrap_err();
+        assert!(err.contains("string"), "unhelpful error: {err}");
+        assert!(tokens_of(r#"{"seq":1,"command":["SCAN",123]}"#).is_err());
+        assert!(tokens_of(r#"{"seq":1,"command":["GET",null]}"#).is_err());
+        assert!(tokens_of(r#"{"seq":1,"command":["EXPIRE","k",{}]}"#).is_err());
+    }
 }
