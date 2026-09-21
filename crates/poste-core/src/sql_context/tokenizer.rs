@@ -651,6 +651,15 @@ pub(crate) fn is_predicate_keyword(w: &str) -> bool {
     matches!(w, "in" | "between" | "like" | "ilike" | "is" | "exists")
 }
 
+/// Set operators (`w` lowercased): they join two query blocks into one
+/// statement while keeping each block's `FROM` list its own scope.
+///
+/// `MINUS` is deliberately absent — Oracle has it as a set operator, Postgres
+/// does not, and treating a `minus` identifier as one would silently mis-scope.
+pub(crate) fn is_set_operator(w: &str) -> bool {
+    matches!(w, "union" | "intersect" | "except")
+}
+
 // ---------------------------------------------------------------------------
 // Token navigation helpers
 // ---------------------------------------------------------------------------

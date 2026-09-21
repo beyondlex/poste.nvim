@@ -1,4 +1,4 @@
-use super::tokenizer::{tokenize, Token, TokenKind};
+use super::tokenizer::{is_set_operator, tokenize, Token, TokenKind};
 
 /// SQL keywords that start a new top-level statement.
 ///
@@ -69,6 +69,37 @@ fn compute_paren_depths(tokens: &[Token]) -> Vec<i32> {
     depths
 }
 
+/// Is the statement-start keyword at `kw_idx` the head of a set-operation
+/// branch (`UNION` / `INTERSECT` / `EXCEPT` before it)?
+///
+/// Those branches are **one** statement: splitting them makes "run statement"
+/// execute only the branch under the cursor and silently change the result.
+fn continues_set_operation(tokens: &[Token], depths: &[i32], sql: &str, kw_idx: usize) -> bool {
+    // `UNION ALL` / `UNION DISTINCT` put a modifier between the operator and
+    // the SELECT; `EXCEPT ALL` too.
+    let mut i = kw_idx;
+    let mut skipped_modifier = false;
+    while i > 0 {
+        i -= 1;
+        match tokens[i].kind {
+            TokenKind::Whitespace | TokenKind::LineComment | TokenKind::BlockComment => continue,
+            TokenKind::Keyword => {
+                let kw = tokens[i].text(sql).to_ascii_lowercase();
+                if is_set_operator(&kw) {
+                    return depths[i] == depths[kw_idx];
+                }
+                if !skipped_modifier && (kw == "all" || kw == "distinct") {
+                    skipped_modifier = true;
+                    continue;
+                }
+                return false;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Find the token range `(start, end_exclusive)` of the statement containing `cursor_idx`.
 ///
 /// Uses semantic keyword-based boundary detection at `paren_depth == 0`:
@@ -89,17 +120,24 @@ pub(crate) fn find_statement_token_range(
     // Otherwise scan backward to find the most recent boundary.
     let mut start = 0;
     let mut stmt_kw = String::new();
+    let mut on_set_op_branch = false;
     if cursor_idx < tokens.len()
         && depths[cursor_idx] == 0
         && tokens[cursor_idx].kind == TokenKind::Keyword
     {
         let kw = tokens[cursor_idx].text(sql).to_ascii_lowercase();
         if is_statement_start_keyword(&kw) {
-            start = cursor_idx;
-            stmt_kw = kw;
+            if continues_set_operation(tokens, &depths, sql, cursor_idx) {
+                // The cursor is on the `SELECT` of a UNION branch: the
+                // statement starts at the first branch, not here.
+                on_set_op_branch = true;
+            } else {
+                start = cursor_idx;
+                stmt_kw = kw;
+            }
         }
     }
-    if start == 0 {
+    if start == 0 || on_set_op_branch {
         // -- backward scan: find statement start --
         for i in (0..cursor_idx).rev() {
             if depths[i] != 0 {
@@ -111,7 +149,9 @@ pub(crate) fn find_statement_token_range(
             }
             if tokens[i].kind == TokenKind::Keyword {
                 let kw = tokens[i].text(sql).to_ascii_lowercase();
-                if is_statement_start_keyword(&kw) {
+                if is_statement_start_keyword(&kw)
+                    && !continues_set_operation(tokens, &depths, sql, i)
+                {
                     start = i;
                     stmt_kw = kw;
                     break;
@@ -185,9 +225,13 @@ pub(crate) fn find_statement_token_range(
         if tokens[i].kind == TokenKind::Keyword {
             let kw = tokens[i].text(sql).to_ascii_lowercase();
             if is_statement_start_keyword(&kw) {
-                if claim_next || kw_contains(&this_kw, &kw) {
+                if claim_next
+                    || kw_contains(&this_kw, &kw)
+                    || continues_set_operation(tokens, &depths, sql, i)
+                {
                     // WITH consumes the next stmt-start keyword.
                     // INSERT/SELECT consume UPDATE (ON CONFLICT DO UPDATE / FOR UPDATE).
+                    // UNION/INTERSECT/EXCEPT branches stay in this statement.
                     claim_next = false;
                     continue;
                 }
@@ -323,6 +367,10 @@ pub fn find_all_statement_ranges(lines: &[&str]) -> Vec<(usize, usize)> {
                     });
                 if claim_next || contained {
                     claim_next = false;
+                    continue;
+                }
+                if continues_set_operation(&tokens, &depths, &text, i) {
+                    // A UNION / INTERSECT / EXCEPT branch: same statement.
                     continue;
                 }
                 push_stmt_range(&mut result, &tokens, stmt_start, i);
