@@ -56,6 +56,27 @@ jobs:
         if: matrix.extra_target
         run: cargo build --release --target ${{ matrix.extra_target }} -p poste-cli
 
+      # Packaging is a contract with the editor plugins, not an internal detail.
+      # poste-db.nvim, poste-redis.nvim, poste-es.nvim, poste-for-db and
+      # poste-for-mq each fetch `poste-<name>.<ext>` at Neovim startup
+      # and unpack it into stdpath("data")/poste/bin, so all three of these
+      # have to hold:
+      #   - the asset name is exactly poste-<name>.tar.gz / .zip, <name> being
+      #     one of x86_64-linux, aarch64-linux, aarch64-macos, x86_64-macos,
+      #     x86_64-windows — the installer derives that string from
+      #     os_uname() and has no lookup or index step. x86_64-macos is the
+      #     odd one: it is not a matrix name, it is the extra target built in
+      #     the aarch64-macos job and its asset name is hard-coded below.
+      #   - the archive holds the bare binary at its root, with no wrapping
+      #     directory, named poste on Unix and poste.exe on Windows — the same
+      #     name the installer writes and the plugin's binary lookup resolves;
+      #   - poste-<name>.<ext>.sha256 is `sha256sum` output: the digest
+      #     as the first whitespace-delimited field. Installers compare it
+      #     case-insensitively because their local hasher may be certutil,
+      #     which prints uppercase.
+      # Changing any of the three breaks auto-install in all five plugins at
+      # once, and the failure surfaces as a startup error on a stranger's
+      # machine rather than here.
       - name: Package (Unix)
         if: matrix.ext == ''
         run: |

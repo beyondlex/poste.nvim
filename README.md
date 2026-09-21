@@ -41,7 +41,10 @@ cargo install --path crates/poste-cli   # installs `poste` onto your PATH
 `v*` tags cut a release; [release.yml](.github/workflows/release.yml) builds
 binaries for x86_64-linux, aarch64-linux, aarch64-macos, x86_64-macos and
 x86_64-windows with SHA256 checksums. The sibling plugins' vendored
-installers download these same assets on first setup.
+installers download these same assets on first setup. Those asset names, the
+flat archive layout and the `sha256sum` digest format are a contract the five
+installers depend on; [release.yml](.github/workflows/release.yml) spells it
+out where the packaging happens.
 
 ## The `poste` CLI
 
