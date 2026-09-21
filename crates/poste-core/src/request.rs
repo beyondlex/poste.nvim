@@ -63,29 +63,67 @@ impl Protocol {
 ///
 /// Every message that quotes a resolved connection URL goes through this —
 /// the URL carries the real password, and a CLI error line ends up in a
-/// terminal, in `:messages`, and in saved result files. The scan is confined
-/// to the authority (up to the first `/`, `?` or `#`): a database name may
-/// legally contain `@`, and treating that as userinfo would both hide the
-/// wrong segment and mangle the host.
+/// terminal, in `:messages`, and in saved result files.
+///
+/// The URL is read in two steps, because one scan cannot serve both shapes:
+///
+/// 1. Inside the authority (up to the first `/`, `?` or `#`): the well-formed
+///    case, and the only one that must not over-redact — a database name may
+///    legally hold `@` (`/team@billing`), and treating that as userinfo would
+///    hide the host instead of a password.
+/// 2. Otherwise across the path, but only when the authority itself looks
+///    like credentials (`user:secret`, not `host:5432`): a hand-written
+///    `url = "…"` with an unencoded `/` in its password puts its `@` after a
+///    path separator, and a scan that stopped at the `/` would print the
+///    password in full. That is the leak; step 1's mangling is not.
+///
+/// Lua's `poste-db/log.lua` `redact_authority` is the display counterpart and
+/// deliberately scans wider (to the first `?`, `#` or space, no credentials
+/// gate): it sees arbitrary log text, where redacting a little too much is
+/// the safe error and the caller cannot promise a single URL. Here the input
+/// is always exactly one connection URL, so the precision is affordable.
 pub fn mask_url_password(url: &str) -> String {
     let Some(scheme_end) = url.find("://") else {
         return url.to_string();
     };
+    let prefix = &url[..scheme_end + 3];
     let rest = &url[scheme_end + 3..];
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let Some(at) = rest[..authority_end].rfind('@') else {
+    // Step 1: the '@' is inside the authority, so the path is off-limits.
+    // Step 2: no '@' there, so widen to the whole region — but only for an
+    // authority that already looks like credentials, or a `@` that merely
+    // appears in a database name or a query value becomes a fake separator.
+    let scan_end = match rest[..authority_end].rfind('@') {
+        Some(_) => authority_end,
+        None if looks_like_credentials(&rest[..authority_end]) => {
+            rest.find(['?', '#']).unwrap_or(rest.len())
+        }
+        None => return url.to_string(),
+    };
+    let Some(at) = rest[..scan_end].rfind('@') else {
         return url.to_string();
     };
     let userinfo = &rest[..at];
-    let Some(colon) = userinfo.rfind(':') else {
+    // Split at the FIRST colon, like a URL parser does: userinfo is
+    // `user:pointer`, so a second colon belongs to the password
+    // (`u:pa:ss@h`), and masking from the last one printed `pa`.
+    let Some(colon) = userinfo.find(':') else {
         return url.to_string();
     };
-    format!(
-        "{}{}:****{}",
-        &url[..scheme_end + 3],
-        &userinfo[..colon],
-        &rest[at..]
-    )
+    format!("{}{}:****{}", prefix, &userinfo[..colon], &rest[at..])
+}
+
+/// `user:secret` rather than `host:5432`: a port is all digits, and a
+/// password that is all digits cannot be told apart from one by shape alone,
+/// so a numeric tail counts as a port (that is step 1's job anyway).
+fn looks_like_credentials(authority: &str) -> bool {
+    match authority.rfind(':') {
+        Some(colon) => {
+            let tail = &authority[colon + 1..];
+            !tail.is_empty() && !tail.chars().all(|c| c.is_ascii_digit())
+        }
+        None => false,
+    }
 }
 
 /// Replace the database name in a connection URL.
@@ -206,6 +244,34 @@ mod tests {
         assert_eq!(
             mask_url_password("postgres://alice:secret@db.example.com/team@billing"),
             "postgres://alice:****@db.example.com/team@billing"
+        );
+    }
+
+    #[test]
+    fn masks_a_password_that_contains_a_colon() {
+        // userinfo is `user:password`, so everything after the first colon is
+        // secret — splitting at the last one printed `pa` of `pa:ss`.
+        assert_eq!(
+            mask_url_password("postgres://u:pa:ss@h:5432/db"),
+            "postgres://u:****@h:5432/db"
+        );
+    }
+
+    #[test]
+    fn masks_a_password_containing_an_unencoded_slash() {
+        // A hand-written `url = "…"` with a raw `/` in the password puts its
+        // '@' after a path separator. Stopping the scan at the '/' (the safe
+        // shape for step 1's false positives) would print this password in
+        // full, so an authority that already looks like credentials widens
+        // the search across the path.
+        assert_eq!(
+            mask_url_password("postgres://u:pa/ss@h:5432/db"),
+            "postgres://u:****@h:5432/db"
+        );
+        // ... and a plain host:port authority still keeps its '@' database
+        assert_eq!(
+            mask_url_password("postgres://h:5432/pa/ss@db"),
+            "postgres://h:5432/pa/ss@db"
         );
     }
 

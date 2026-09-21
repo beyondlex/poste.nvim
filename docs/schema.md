@@ -58,8 +58,13 @@ home per side, named below, and are mirrors of each other too:
    `clickhouse://` — and nothing else. The alias schemes matter only for a
    raw `url = "…"` entry, which bypasses rule 3's normalization.
 5. A message that quotes a resolved URL masks its password
-   (`poste_core::mask_url_password`, authority-only scan). The URL is the
-   credential carrier; the connection *name* is what may be printed.
+   (`poste_core::mask_url_password`). The URL is the credential carrier; the
+   connection *name* is what may be printed. The scan is two-step because one
+   pass cannot serve both shapes: an `@` inside the authority is the userinfo
+   separator, and a `@` past the first `/` only is when the authority itself
+   already looks like credentials (`user:secret`, not `host:5432`) — that
+   catches a hand-written `url` whose password holds an unencoded `/`, while
+   leaving a legal `@` in a database name (`/team@billing`) alone.
 
 ## Subcommands
 
