@@ -69,7 +69,7 @@ pub async fn execute_command_on(
     match cmd.query_async::<redis::Value>(con).await {
         Ok(val) => {
             let value = redis_value_to_json(&val, &cmd_name, max_items, max_bytes);
-            let status = status_text(&val);
+            let status = status_text(&val, max_bytes);
             CommandOutcome {
                 command: display,
                 seq,
@@ -148,8 +148,29 @@ fn redis_type_name(val: &redis::Value) -> &'static str {
     }
 }
 
+/// Cut `s` to at most `max_bytes`, never mid-character, and report whether
+/// anything was dropped. `&s[..max_bytes]` panics when the cut lands inside a
+/// multibyte sequence, and the payloads here are user data (a CJK or emoji
+/// value whose `max_bytes`-th byte continues a sequence would otherwise crash
+/// the whole redis-exec/session process).
+fn cap_bytes(s: &str, max_bytes: usize) -> (&str, bool) {
+    if s.len() <= max_bytes {
+        return (s, false);
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&s[..end], true)
+}
+
 /// Human-readable redis-cli style status line.
-fn status_text(val: &redis::Value) -> String {
+///
+/// Bounded by `max_bytes` like the value itself: the string arms quote the
+/// payload, and this line ships on the same stdout the Lua side reads
+/// line-by-line (and rides into its in-memory history) — an uncapped `GET` of
+/// a 50 MB value would put all 50 MB there even though `value` was cut.
+fn status_text(val: &redis::Value, max_bytes: usize) -> String {
     match val {
         redis::Value::Okay => "OK".into(),
         redis::Value::Nil => "(nil)".into(),
@@ -158,8 +179,11 @@ fn status_text(val: &redis::Value) -> String {
         redis::Value::Map(m) => format!("{} entries", m.len()),
         // SimpleString/BulkString: show the payload itself (PING → PONG,
         // GET → the value), matching redis-cli's reply rendering
-        redis::Value::SimpleString(s) => s.clone(),
-        redis::Value::BulkString(b) => String::from_utf8_lossy(b).to_string(),
+        redis::Value::SimpleString(s) => cap_bytes(s, max_bytes).0.to_string(),
+        redis::Value::BulkString(b) => {
+            let lossy = String::from_utf8_lossy(b);
+            cap_bytes(&lossy, max_bytes).0.to_string()
+        }
         _ => redis_type_name(val).to_string(),
     }
 }
@@ -204,20 +228,7 @@ pub fn redis_value_to_json(
             let total = b.len();
             match std::str::from_utf8(b) {
                 Ok(s) => {
-                    let truncated = total > max_bytes;
-                    // Slice on a CHAR boundary: `&s[..max_bytes]` panics when
-                    // the cut lands inside a multibyte character (a CJK/emoji
-                    // value whose max_bytes-th byte continues a sequence
-                    // crashes the whole redis-exec/session process).
-                    let shown: &str = if truncated {
-                        let mut end = max_bytes;
-                        while end > 0 && !s.is_char_boundary(end) {
-                            end -= 1;
-                        }
-                        &s[..end]
-                    } else {
-                        s
-                    };
+                    let (shown, truncated) = cap_bytes(s, max_bytes);
                     let mut obj = json!({
                         "type": "string",
                         "value": shown,
@@ -479,6 +490,32 @@ mod tests {
         assert_eq!(out["truncated"], json!(true));
         assert_eq!(out["len"], 200);
         assert_eq!(out["value"].as_str().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn status_line_is_capped_like_the_value() {
+        // `status` shares stdout with the capped `value` and is stored in the
+        // Lua history; quoting the reply in full meant a single GET could emit
+        // its whole payload no matter what --max-bytes said.
+        let raw = "y".repeat(5000).into_bytes();
+        let val = redis::Value::BulkString(raw);
+        assert_eq!(status_text(&val, 64).len(), 64);
+        assert_eq!(
+            redis_value_to_json(&val, "GET", 100, 64)["value"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        // short replies still quote the payload (redis-cli style)
+        assert_eq!(
+            status_text(&redis::Value::BulkString(b"PONG".to_vec()), usize::MAX / 2),
+            "PONG"
+        );
+        // and the cut stays on a character boundary: 30 CJK chars = 90 bytes,
+        // a cap of 64 lands inside the 22nd char and floors to 63 bytes
+        let cjk = redis::Value::BulkString("漢".repeat(30).into_bytes());
+        assert_eq!(status_text(&cjk, 64).len(), 63);
     }
 
     #[test]
