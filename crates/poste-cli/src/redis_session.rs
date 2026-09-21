@@ -34,6 +34,22 @@ async fn emit(stdout: &mut tokio::io::Stdout, ev: Value) -> Result<()> {
     Ok(())
 }
 
+/// An error reply for a request that never reached redis.
+fn error_outcome(
+    tokens: &[String],
+    seq: usize,
+    msg: String,
+) -> poste_exec::redis_executor::CommandOutcome {
+    poste_exec::redis_executor::CommandOutcome {
+        command: tokens.join(" "),
+        seq,
+        latency_ms: 0,
+        value: json!({"type": "nil", "value": null}),
+        status: "error".into(),
+        error: Some(msg),
+    }
+}
+
 /// The command tokens of a request, or the reason it cannot be run.
 ///
 /// Two rules, and both are about what the caller is still waiting for:
@@ -139,29 +155,52 @@ pub async fn execute(args: RedisSessionArgs) -> Result<()> {
             // Reconnect failed: fall through to the error outcome.
             if let Ok(Ok(fresh)) = rebuilt {
                 con = fresh;
-                if let Some(db) = current_db.filter(|d| *d != 0) {
-                    let _ = redis::cmd("SELECT")
-                        .arg(db.to_string())
-                        .query_async::<String>(&mut con)
-                        .await;
-                }
-                attempt = tokio::time::timeout(
-                    COMMAND_TIMEOUT,
-                    execute_command_on(&mut con, &tokens, seq, max_items, max_bytes),
-                )
-                .await;
+                // Restoring the tracked db is not best-effort. Running the
+                // command anyway would execute it against database 0 while the
+                // buffer header still names db N — the same silent wrong-db
+                // hazard poste-redis guards against when it steers SELECT
+                // (session_conn.lua records a pending entry per SELECT).
+                let restored = match current_db.filter(|db| *db != 0) {
+                    None => Ok(()),
+                    // Bounded like every other await here: the fresh
+                    // connection can be as dead as the one it replaced, and an
+                    // unbounded SELECT would leave the stdin loop — and every
+                    // later request behind it — hanging with no reply, which is
+                    // the whole failure this rescue exists to prevent.
+                    Some(db) => {
+                        match tokio::time::timeout(
+                            RECONNECT_TIMEOUT,
+                            redis::cmd("SELECT")
+                                .arg(db.to_string())
+                                .query_async::<String>(&mut con),
+                        )
+                        .await
+                        {
+                            Err(_) => Err(format!("SELECT {db} timed out after reconnect")),
+                            Ok(Err(e)) => Err(format!("SELECT {db} failed after reconnect: {e}")),
+                            Ok(Ok(_)) => Ok(()),
+                        }
+                    }
+                };
+                attempt = match restored {
+                    Ok(()) => {
+                        tokio::time::timeout(
+                            COMMAND_TIMEOUT,
+                            execute_command_on(&mut con, &tokens, seq, max_items, max_bytes),
+                        )
+                        .await
+                    }
+                    Err(msg) => Ok(error_outcome(&tokens, seq, msg)),
+                };
             }
         }
         let outcome = match attempt {
             Ok(outcome) => outcome,
-            Err(_) => poste_exec::redis_executor::CommandOutcome {
-                command: tokens.join(" "),
+            Err(_) => error_outcome(
+                &tokens,
                 seq,
-                latency_ms: 0,
-                value: json!({"type": "nil", "value": null}),
-                status: "error".into(),
-                error: Some("redis connection lost (command timed out)".into()),
-            },
+                "redis connection lost (command timed out)".to_string(),
+            ),
         };
         if outcome.error.is_none()
             && tokens
