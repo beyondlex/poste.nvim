@@ -282,6 +282,12 @@ pub fn known_functions() -> &'static [&'static str] {
 }
 
 /// Return function names filtered by dialect.
+///
+/// Each dialect's menu drops the lists that name functions it lacks:
+/// Postgres drops [`MYSQL_ONLY`] and [`NOT_PG`], MySQL and SQLite drop
+/// [`PG_ONLY`], and SQLite additionally drops [`MYSQL_ONLY`] while MySQL drops
+/// [`SQLITE_ONLY`].  A name in two lists would disappear from every menu, so
+/// the lists stay disjoint by construction — see the consistency test.
 pub fn known_functions_for_dialect(dialect: SqlDialect) -> Vec<&'static str> {
     let all = known_functions();
     match dialect {
@@ -289,7 +295,7 @@ pub fn known_functions_for_dialect(dialect: SqlDialect) -> Vec<&'static str> {
         SqlDialect::Postgres => all
             .iter()
             .copied()
-            .filter(|f| !MYSQL_ONLY.contains(f) && !SQLITE_ONLY.contains(f))
+            .filter(|f| !MYSQL_ONLY.contains(f) && !SQLITE_ONLY.contains(f) && !NOT_PG.contains(f))
             .collect(),
         SqlDialect::MySql => all
             .iter()
@@ -304,23 +310,23 @@ pub fn known_functions_for_dialect(dialect: SqlDialect) -> Vec<&'static str> {
     }
 }
 
+/// Names the Postgres and SQLite menus drop.  Each `*_ONLY` list is read as
+/// "belongs to one dialect", which is what the filters in
+/// [`known_functions_for_dialect`] use it for: `MYSQL_ONLY` never reaches the
+/// Postgres *or* SQLite menu.  A name shared by MySQL and SQLite therefore does
+/// not belong here — see [`NOT_PG`].
 static MYSQL_ONLY: &[&str] = &[
     // String (MySQL-specific variants)
-    "INSTR",
     "LOCATE",
     "SUBSTRING_INDEX",
-    "SUBSTR",
     "MID",
     "FIELD",
     "FIND_IN_SET",
     "ELT",
     "SOUNDEX",
     "ORD",
-    "UNHEX",
-    "HEX",
     "STRCMP",
     "SPACE",
-    "CHAR",
     // Regexp (MySQL-specific)
     "REGEXP_REPLACE",
     "REGEXP_LIKE",
@@ -329,7 +335,6 @@ static MYSQL_ONLY: &[&str] = &[
     // Numeric
     "CRC32",
     // Aggregate
-    "GROUP_CONCAT",
     "BIT_AND",
     "BIT_OR",
     "BIT_XOR",
@@ -337,17 +342,11 @@ static MYSQL_ONLY: &[&str] = &[
     "JSON_KEYS",
     "JSON_CONTAINS",
     "JSON_CONTAINS_PATH",
-    "JSON_SET",
-    "JSON_INSERT",
     "JSON_REPLACE",
-    "JSON_REMOVE",
     "JSON_MERGE",
     "JSON_MERGE_PATCH",
-    "JSON_TYPE",
-    "JSON_VALID",
     "JSON_DEPTH",
     "JSON_LENGTH",
-    "JSON_QUOTE",
     "JSON_TABLE",
     "JSON_VALUE",
     "JSON_AGG",
@@ -382,7 +381,6 @@ static MYSQL_ONLY: &[&str] = &[
     "MAKETIME",
     "CONVERT_TZ",
     // Conditional
-    "IFNULL",
     "IF",
     // Security
     "AES_ENCRYPT",
@@ -408,6 +406,26 @@ static MYSQL_ONLY: &[&str] = &[
     "IS_USED_LOCK",
     "SLEEP",
     "VALUES",
+];
+
+/// Functions Postgres does not have while MySQL *and* SQLite both do, so only
+/// the Postgres menu drops them.  Putting a name here instead of in
+/// [`MYSQL_ONLY`] is what keeps `SELECT hex(…)` and the `json_set` family
+/// completable in a SQLite buffer — each was verified against SQLite 3.51.
+/// `SUBSTR` belongs to neither list: all three dialects have it.
+static NOT_PG: &[&str] = &[
+    "INSTR",
+    "HEX",
+    "UNHEX",
+    "IFNULL",
+    "GROUP_CONCAT",
+    "CHAR",
+    "JSON_TYPE",
+    "JSON_VALID",
+    "JSON_QUOTE",
+    "JSON_SET",
+    "JSON_INSERT",
+    "JSON_REMOVE",
 ];
 
 static PG_ONLY: &[&str] = &[
@@ -824,5 +842,93 @@ mod tests {
             "Generic should include SQLite-only TOTAL"
         );
         assert_eq!(all.len(), known_functions().len());
+    }
+
+    /// `MYSQL_ONLY` drops a name from the SQLite menu too, so functions SQLite
+    /// really has must not live there — each of these was run against SQLite
+    /// 3.51 (`SELECT hex(…), instr(…), json_set(…), …`).
+    #[test]
+    fn test_functions_shared_with_sqlite_reach_the_sqlite_menu() {
+        let sqlite = known_functions_for_dialect(crate::sql_context::SqlDialect::Sqlite);
+        for name in [
+            "SUBSTR",
+            "INSTR",
+            "HEX",
+            "UNHEX",
+            "IFNULL",
+            "GROUP_CONCAT",
+            "CHAR",
+            "JSON_TYPE",
+            "JSON_VALID",
+            "JSON_QUOTE",
+            "JSON_SET",
+            "JSON_INSERT",
+            "JSON_REMOVE",
+        ] {
+            assert!(
+                sqlite.contains(&name),
+                "SQLite has {name}, so its menu must offer it"
+            );
+        }
+    }
+
+    /// The same names stay off the Postgres menu, which is why they are listed
+    /// rather than simply removed from the filters.
+    #[test]
+    fn test_not_pg_functions_stay_off_the_postgres_menu() {
+        let pg = known_functions_for_dialect(crate::sql_context::SqlDialect::Postgres);
+        for name in [
+            "INSTR",
+            "HEX",
+            "UNHEX",
+            "IFNULL",
+            "GROUP_CONCAT",
+            "JSON_SET",
+        ] {
+            assert!(
+                !pg.contains(&name),
+                "Postgres has no {name}, so its menu must not offer it"
+            );
+        }
+        assert!(
+            pg.contains(&"SUBSTR"),
+            "Postgres does have substr(), unlike the others"
+        );
+    }
+
+    /// A name missing from `known_functions()` filters nothing (the base list is
+    /// what the menus are built from), and a name in two lists would vanish from
+    /// every menu — both are silent data edits, so check them outright.
+    #[test]
+    fn test_dialect_exclusion_lists_are_consistent() {
+        let base = known_functions();
+        let lists = [
+            ("MYSQL_ONLY", MYSQL_ONLY),
+            ("PG_ONLY", PG_ONLY),
+            ("SQLITE_ONLY", SQLITE_ONLY),
+            ("NOT_PG", NOT_PG),
+        ];
+        for (label, list) in lists {
+            for name in list {
+                assert!(
+                    base.contains(name),
+                    "{label} names {name}, which is not in known_functions()"
+                );
+            }
+        }
+        // Two lists is a silent contradiction: the name is dropped by rules that
+        // were written for different dialects, so nobody reading one of them can
+        // tell which menus it actually leaves — and in three, it leaves all of
+        // them.
+        for (la, a) in lists {
+            for (lb, b) in lists {
+                if la >= lb {
+                    continue;
+                }
+                for name in a {
+                    assert!(!b.contains(name), "{name} is listed in both {la} and {lb}");
+                }
+            }
+        }
     }
 }
