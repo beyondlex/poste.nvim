@@ -5,7 +5,9 @@ use super::detectors::{
 use super::scanner::detect_scan_backward;
 use super::scope;
 use super::statements;
-use super::tokenizer::{extract_prefix, find_token_at_offset, tokenize, TokenKind};
+use super::tokenizer::{
+    escapes_for, extract_prefix, find_token_at_offset, tokenize_with, TokenKind,
+};
 use super::{functions, ContextResult, ContextType, SqlDialect};
 
 pub fn detect_context(sql: &str, offset: usize) -> Option<ContextResult> {
@@ -17,7 +19,7 @@ pub fn detect_context_with_dialect(
     offset: usize,
     dialect: SqlDialect,
 ) -> Option<ContextResult> {
-    let tokens = tokenize(sql);
+    let tokens = tokenize_with(sql, escapes_for(dialect));
     if tokens.is_empty() {
         return Some(ContextResult {
             context_type: ContextType::Keyword,

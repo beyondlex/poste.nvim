@@ -1994,3 +1994,37 @@ fn test_all_ranges_standalone_update_is_a_statement() {
     let ranges = find_all_statement_ranges(&lines);
     assert_eq!(ranges, vec![(0, 0), (1, 1), (2, 2)]);
 }
+
+// ---- Dialect reaches the tokenizer (wiring, not just the scanner) ----
+
+#[test]
+fn test_detect_mysql_escape_keeps_the_block_after_it() {
+    // The quote reading only helps if the entry point actually passes the
+    // dialect down: a cursor at the end of the block after a dumped row is a
+    // column context under MySQL, and "inside a string" for everything else.
+    let sql = "INSERT INTO t VALUES ('it\\'s here'); SELECT * FROM users WHERE ";
+    let off = sql.len();
+    let generic = detect_context_with_dialect(sql, off, SqlDialect::Generic).unwrap();
+    assert!(
+        generic.in_string,
+        "the standard reading still loses the rest of the block — that is the bug"
+    );
+    let mysql = detect_context_with_dialect(sql, off, SqlDialect::MySql).unwrap();
+    assert!(!mysql.in_string);
+    assert_eq!(mysql.context_type, ContextType::Column);
+    assert!(
+        mysql.tables.iter().any(|t| t.name == "users"),
+        "the FROM target after the dumped row is still a table: {:?}",
+        mysql.tables
+    );
+}
+
+#[test]
+fn test_detect_dollar_tagged_body_keeps_the_block_after_it() {
+    let sql = "CREATE FUNCTION f() AS $fn$ SELECT 1; $fn$ LANGUAGE sql; SELECT * FROM t WHERE ";
+    let off = sql.len();
+    let ctx = detect_context_with_dialect(sql, off, SqlDialect::Postgres).unwrap();
+    assert!(!ctx.in_string);
+    assert_eq!(ctx.context_type, ContextType::Column);
+    assert!(ctx.tables.iter().any(|t| t.name == "t"));
+}

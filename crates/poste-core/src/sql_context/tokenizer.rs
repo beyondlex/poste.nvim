@@ -4,6 +4,10 @@
 //! dollar-quoted strings, and escaped quotes. Produces a flat token list
 //! with byte positions suitable for cursor-offset lookup.
 
+use crate::sql_parser::QuoteEscapes;
+
+use super::SqlDialect;
+
 // ---------------------------------------------------------------------------
 // Token types
 // ---------------------------------------------------------------------------
@@ -61,12 +65,19 @@ impl Token {
 // Tokenizer
 // ---------------------------------------------------------------------------
 
-/// Tokenize SQL text. Returns tokens with byte positions.
+/// Tokenize SQL text with the standard (`''`-only) quote reading.
 pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
+    tokenize_with(sql, QuoteEscapes::Standard)
+}
+
+/// Tokenize SQL text, reading string literals the way `escapes` says the
+/// dialect does. Returns tokens with byte positions.
+pub(crate) fn tokenize_with(sql: &str, escapes: QuoteEscapes) -> Vec<Token> {
     let bytes = sql.as_bytes();
     let n = bytes.len();
     let mut tokens = Vec::new();
     let mut i = 0;
+    let backslash = escapes == QuoteEscapes::Backslash;
 
     while i < n {
         let start = i;
@@ -113,7 +124,11 @@ pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
             }
             // Single-quoted string
             b'\'' => {
-                i = scan_quoted(bytes, i, b'\'');
+                // `E'…'` is Postgres' explicit opt-in to C-style escapes, so
+                // inside one run a backslash always escapes the next character;
+                // `escapes` adds the dialect-wide form of the same rule.
+                let esc = backslash || c_escapes_prefix(bytes, start);
+                i = scan_quoted(bytes, i, b'\'', esc);
                 tokens.push(Token {
                     kind: TokenKind::StrLit,
                     start,
@@ -122,7 +137,7 @@ pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
             }
             // Double-quoted identifier
             b'"' => {
-                i = scan_quoted(bytes, i, b'"');
+                i = scan_quoted(bytes, i, b'"', backslash);
                 tokens.push(Token {
                     kind: TokenKind::QuotedIdent,
                     start,
@@ -131,7 +146,7 @@ pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
             }
             // Backtick-quoted identifier (MySQL)
             b'`' => {
-                i = scan_quoted(bytes, i, b'`');
+                i = scan_quoted(bytes, i, b'`', backslash);
                 tokens.push(Token {
                     kind: TokenKind::QuotedIdent,
                     start,
@@ -313,14 +328,32 @@ pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
 // Quoted-run scanners
 // ---------------------------------------------------------------------------
 
+/// The quote-escape reading a dialect's literals need. This is the tokenizer's
+/// view of the same rule [`QuoteEscapes::for_protocol`] gives the splitter, so
+/// the two scanners cannot disagree about where a literal ends — and `Generic`
+/// keeps the standard reading, because a bare `\` is only an escape in MySQL,
+/// and a caller that knows it is on MySQL says so through `--dialect`.
+pub(crate) fn escapes_for(dialect: SqlDialect) -> QuoteEscapes {
+    match dialect {
+        SqlDialect::MySql => QuoteEscapes::Backslash,
+        _ => QuoteEscapes::Standard,
+    }
+}
+
 /// Scan a run quoted by `quote`, starting at its opening character. A doubled
 /// quote (`''`, `""`, ` `` `) is that character escaped, not a terminator, so
-/// `'it''s'` and `"my""table"` are each one run. An unterminated run ends at
-/// the end of the input; returns the index just past the closing quote.
-fn scan_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
+/// `'it''s'` and `"my""table"` are each one run. When `backslash` is set, a
+/// `\` also takes the next character out of the scan (MySQL's default
+/// `sql_mode`, Postgres' `E'…'`). An unterminated run ends at the end of the
+/// input; returns the index just past the closing quote.
+fn scan_quoted(bytes: &[u8], start: usize, quote: u8, backslash: bool) -> usize {
     let n = bytes.len();
     let mut i = start + 1;
     while i < n {
+        if backslash && bytes[i] == b'\\' {
+            i += 2;
+            continue;
+        }
         if bytes[i] == quote {
             i += 1;
             if i < n && bytes[i] == quote {
@@ -332,6 +365,23 @@ fn scan_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
         i += 1;
     }
     i
+}
+
+/// True when the `'` at `start` opens an `E'…'` (or `e'…'`) literal, which is
+/// Postgres for "interpret backslashes in this literal". The `E` has to stand
+/// alone: `WHERE e'x'` is that, `SELECT foobar_e'x'` is an identifier followed
+/// by an ordinary string.
+fn c_escapes_prefix(bytes: &[u8], start: usize) -> bool {
+    if !matches!(
+        start.checked_sub(1).and_then(|i| bytes.get(i)),
+        Some(b'e' | b'E')
+    ) {
+        return false;
+    }
+    !matches!(
+        start.checked_sub(2).and_then(|i| bytes.get(i)),
+        Some(&c) if c.is_ascii_alphanumeric() || c == b'_'
+    )
 }
 
 /// If the `$` at `start` opens a Postgres dollar quote (`$$`, or `$tag$` with
@@ -769,8 +819,8 @@ mod tests {
         tokenize(src).into_iter().map(|t| t.kind).collect()
     }
 
-    fn quoted_spans(src: &str) -> Vec<(TokenKind, String)> {
-        tokenize(src)
+    fn quoted_spans_with(src: &str, escapes: QuoteEscapes) -> Vec<(TokenKind, String)> {
+        tokenize_with(src, escapes)
             .into_iter()
             .filter(|t| {
                 matches!(
@@ -780,6 +830,10 @@ mod tests {
             })
             .map(|t| (t.kind.clone(), t.text(src).to_string()))
             .collect()
+    }
+
+    fn quoted_spans(src: &str) -> Vec<(TokenKind, String)> {
+        quoted_spans_with(src, QuoteEscapes::Standard)
     }
 
     /// `$tag$ … $tag$` is the usual spelling of a function or DO-block body, and
@@ -836,6 +890,65 @@ mod tests {
         assert_eq!(
             quoted_spans("SELECT 'it''s' AS x"),
             vec![(TokenKind::StrLit, "'it''s'".to_string())]
+        );
+    }
+
+    /// MySQL's default `sql_mode` reads `\'` as an escaped quote, which is the
+    /// form `mysqldump` writes. Under the standard reading the literal ends
+    /// early, the next `'` opens another, and everything after it — including
+    /// the `SELECT` the user is typing into — arrives as one string, so
+    /// completion reports "inside a string" and offers nothing for the rest of
+    /// the block. This is the tokenizer's side of the rule the splitter already
+    /// applies per dialect.
+    #[test]
+    fn mysql_reads_backslash_escapes() {
+        let src = "INSERT INTO t VALUES ('it\\'s here'); SELECT * FROM users WHERE a = 1";
+        // The standard reading is the bug: the literal closes at `it\`, the next
+        // `'` re-opens one that has no partner, and the `SELECT` after it is
+        // inside a string as far as the tokenizer is concerned.
+        assert!(
+            !tokenize_with(src, QuoteEscapes::Standard)
+                .iter()
+                .any(|t| t.kind == TokenKind::Keyword && t.text(src) == "SELECT"),
+            "expected the standard reading to lose the SELECT — that is the bug"
+        );
+        let mysql = tokenize_with(src, QuoteEscapes::Backslash);
+        assert_eq!(
+            quoted_spans_with(src, QuoteEscapes::Backslash),
+            vec![(TokenKind::StrLit, "'it\\'s here'".to_string())]
+        );
+        assert!(
+            mysql
+                .iter()
+                .any(|t| t.kind == TokenKind::Keyword && t.text(src) == "SELECT"),
+            "the statement after a dumped row must still be there"
+        );
+    }
+
+    /// `E'…'` opts into backslash escapes for that one literal in Postgres,
+    /// whatever the dialect default is — the prefix is the caller saying so.
+    /// Under the plain standard reading `E'\''` ends at the wrong quote and
+    /// takes the rest of the buffer with it.
+    #[test]
+    fn e_prefixed_literal_reads_backslashes_too() {
+        let src = "SELECT E'\\'' AS x, name FROM t";
+        let toks = tokenize_with(src, QuoteEscapes::Standard);
+        assert_eq!(
+            toks.iter()
+                .filter(|t| t.kind == TokenKind::StrLit)
+                .map(|t| t.text(src))
+                .collect::<Vec<_>>(),
+            vec!["'\\''"],
+            "the literal is `'\\''` — one escaped quote, then the close"
+        );
+        assert!(toks
+            .iter()
+            .any(|t| t.kind == TokenKind::Keyword && t.text(src) == "FROM"));
+        // An `e` that is the tail of an identifier is not the prefix.
+        assert_eq!(
+            quoted_spans("SELECT name'x' AS y"),
+            vec![(TokenKind::StrLit, "'x'".to_string())],
+            "name'x' is an identifier followed by an ordinary literal"
         );
     }
 }
