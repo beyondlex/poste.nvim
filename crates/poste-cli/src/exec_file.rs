@@ -395,6 +395,24 @@ fn record_err<F>(
     emit(&error_result_event(seq, Some(total), sql, err, 0).to_string());
 }
 
+/// Close a `--mode transaction` batch. Every dialect used to end with
+/// `COMMIT … .ok()`, which threw away the one error that matters most: a
+/// server-side COMMIT failure (deferred constraint, read-only replica, disk
+/// full, connection dropped mid-batch) rolls the whole batch back while the
+/// stream still reads "N statements succeeded" and the summary says no
+/// failures. Reported as a statement-shaped error event so the Lua side
+/// counts it (`status ~= "ok"` → `has_error`) and shows the reason; the
+/// summary's `rolled_back` follows from `failed > 0`, as it already does for
+/// a mid-batch abort.
+fn record_commit<F>(emit: &mut F, total: u64, committed: anyhow::Result<()>, failed: &mut u64)
+where
+    F: FnMut(&str),
+{
+    if let Err(e) = committed {
+        record_err(emit, total + 1, total, "COMMIT", &e, failed);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn exec_sqlite<F>(
     connection_url: &str,
@@ -474,7 +492,16 @@ where
     }
 
     if in_transaction {
-        sqlx::query("COMMIT").execute(&mut *conn).await.ok();
+        record_commit(
+            emit,
+            total,
+            sqlx::query("COMMIT")
+                .execute(&mut *conn)
+                .await
+                .map(|_| ())
+                .map_err(anyhow::Error::from),
+            failed,
+        );
     }
 
     drop(conn);
@@ -580,9 +607,12 @@ where
     }
 
     if in_transaction {
-        mssql::mssql_batch(&mut client, "COMMIT", timeout_secs)
-            .await
-            .ok();
+        record_commit(
+            emit,
+            total,
+            mssql::mssql_batch(&mut client, "COMMIT", timeout_secs).await,
+            failed,
+        );
     }
 
     Ok(())
@@ -769,7 +799,16 @@ where
     }
 
     if in_transaction {
-        sqlx::query("COMMIT").execute(&mut *conn).await.ok();
+        record_commit(
+            emit,
+            total,
+            sqlx::query("COMMIT")
+                .execute(&mut *conn)
+                .await
+                .map(|_| ())
+                .map_err(anyhow::Error::from),
+            failed,
+        );
     }
     drop(conn);
     pool.close().await;
@@ -862,7 +901,15 @@ where
         // mysql COMMITs only a clean run; the failing statement above
         // already rolled back, so re-COMMITting would be a no-op at best.
         if *failed == 0 {
-            conn.execute("COMMIT").await.ok();
+            record_commit(
+                emit,
+                total,
+                conn.execute("COMMIT")
+                    .await
+                    .map(|_| ())
+                    .map_err(anyhow::Error::from),
+                failed,
+            );
         }
         conn.execute("SET autocommit = 1").await.ok();
     }
@@ -874,6 +921,47 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A COMMIT the server rejected must reach the stream as an error event:
+    /// the batch is rolled back even though every statement above it
+    /// succeeded, and `failed > 0` is also what flips the summary's
+    /// `rolled_back` flag.
+    #[test]
+    fn commit_failure_is_reported() {
+        let mut events = Vec::new();
+        let mut failed = 0u64;
+        record_commit(
+            &mut |line| events.push(line.to_string()),
+            3,
+            Err(anyhow::anyhow!("FOREIGN KEY constraint failed")),
+            &mut failed,
+        );
+        assert_eq!(failed, 1);
+        assert_eq!(events.len(), 1);
+        let ev: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert_eq!(ev["type"], "result");
+        assert_eq!(ev["status"], "error");
+        assert_eq!(ev["sql"], "COMMIT");
+        assert_eq!(ev["seq"], 4, "one past the last statement's seq");
+        assert_eq!(ev["total"], 3);
+        assert_eq!(ev["error"], "FOREIGN KEY constraint failed");
+    }
+
+    /// A clean COMMIT emits nothing — otherwise every transaction-mode run
+    /// would gain a phantom failed statement.
+    #[test]
+    fn clean_commit_emits_nothing() {
+        let mut events = Vec::new();
+        let mut failed = 0u64;
+        record_commit(
+            &mut |line| events.push(line.to_string()),
+            3,
+            Ok(()),
+            &mut failed,
+        );
+        assert!(events.is_empty());
+        assert_eq!(failed, 0);
+    }
 
     #[test]
     fn test_extract_database_from_url() {
