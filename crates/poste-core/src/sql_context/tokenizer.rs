@@ -51,10 +51,25 @@ impl Token {
     /// Return the display text of the token, stripping quotes for QuotedIdent.
     /// For a backtick-quoted or double-quoted identifier, returns the inner text
     /// without the quote characters.
+    ///
+    /// The closing quote is removed only when it is actually there.  An
+    /// unterminated identifier runs to the end of the input, which is where a
+    /// cursor normally sits while the user is still typing (`SELECT "my_col`),
+    /// so its last byte is part of the name.  Stripping it unconditionally
+    /// dropped that character: the completion prefix came back one letter short,
+    /// and after a bare opening quote (`"p".`) it came back as a quote itself,
+    /// which matches no column and empties the menu.
     pub(crate) fn display_text<'a>(&self, sql: &'a str) -> &'a str {
         match self.kind {
-            TokenKind::QuotedIdent if self.end - self.start >= 2 => {
-                &sql[self.start + 1..self.end - 1]
+            TokenKind::QuotedIdent => {
+                let raw = self.text(sql);
+                let bytes = raw.as_bytes();
+                // Both supported quote forms (`"…"` and `` `…` ``) close with the
+                // byte they open with, so that equality is what says the token is
+                // terminated.
+                let closed = bytes.len() >= 2 && bytes[bytes.len() - 1] == bytes[0];
+                let end = if closed { self.end - 1 } else { self.end };
+                &sql[self.start + 1..end]
             }
             _ => self.text(sql),
         }

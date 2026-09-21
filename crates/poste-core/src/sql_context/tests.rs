@@ -2174,6 +2174,39 @@ fn test_typed_prefix_in_a_from_list_is_still_a_table() {
 }
 
 #[test]
+fn test_unterminated_quoted_prefix_keeps_every_typed_character() {
+    // End of input is where the cursor sits while typing, and an opening quote
+    // with no closing one runs to that point: the trailing character belongs to
+    // the name, so it must survive the quote stripping.
+    let result = detect_at("SELECT * FROM posts \"p\" WHERE \"p\".\"ti▮");
+    assert_eq!(
+        result.context_type,
+        ContextType::DotColumn {
+            table: "p".into(),
+            schema: None
+        }
+    );
+    assert_eq!(result.prefix, "ti");
+
+    let result = detect_at("SELECT * FROM \"blog\".\"ti▮");
+    assert_eq!(
+        result.context_type,
+        ContextType::SchemaTable {
+            schema: "blog".into()
+        }
+    );
+    assert_eq!(result.prefix, "ti");
+
+    // A lone opening quote is an empty prefix, not a `"` to filter on — the
+    // latter matched no column and left the menu empty.
+    let result = detect_at("SELECT * FROM posts \"p\" WHERE \"p\".\"▮");
+    assert_eq!(result.prefix, "");
+
+    // A closed quoted identifier keeps losing both quotes.
+    assert_eq!(detect_at("SELECT \"col\"▮ FROM t").prefix, "col");
+}
+
+#[test]
 fn test_typed_prefix_in_update_set_completes_columns() {
     for marked in [
         "UPDATE users SET na▮ WHERE id = 1",
