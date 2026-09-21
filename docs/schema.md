@@ -48,7 +48,14 @@ conventions.
   `$POSTE_BINARY`, then the configured install path
   (`stdpath("data")/poste/bin/poste`), then dev builds (CWD and next to the
   plugin, incl. `bin/poste`), then `$PATH`, and a candidate must be **both
-  readable and executable**. It returns `(path, source)` and the diagnostics
+  readable and executable** — and on Windows the same name with `.exe`
+  appended counts too, because that is the file both the installer and cargo
+  write (`state.is_windows`, derived from `os_uname().sysname` the way
+  `detect_platform()` derives it). Testing only the extension-less spelling
+  made startup download a `poste.exe` the next lookup could not see: it then
+  re-downloaded every launch, and checkhealth reported no binary unless
+  `vim.g.poste_binary` named the `.exe` in full — while the download failure
+  message tells the user to set an extension-less path. It returns `(path, source)` and the diagnostics
   print the source (`:PosteDbInfo` / `:PosteRedisInfo`, checkhealth), because
   the install path outranks `$PATH` and "why is my own build not being used"
   has to be answerable without reading the lookup. The startup check that
