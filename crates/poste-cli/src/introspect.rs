@@ -30,7 +30,7 @@ pub async fn execute(args: IntrospectArgs) -> Result<()> {
     let protocol = poste_core::Protocol::from_sql_url(&connection_url).ok_or_else(|| {
         anyhow::anyhow!(
             "Cannot determine dialect from connection URL: {}",
-            crate::connection::mask_url_password(&connection_url)
+            poste_core::mask_url_password(&connection_url)
         )
     })?;
     let Some(dialect) = poste_exec::sql_dialect::dialect_for(&protocol) else {

@@ -8,4 +8,4 @@ pub mod sql_parser;
 
 pub use env::{substitute_vars, Environment};
 pub use parser::{BlockMeta, Parser, VarResolver};
-pub use request::{replace_database_in_url, Protocol, Request};
+pub use request::{mask_url_password, replace_database_in_url, Protocol, Request};

@@ -69,7 +69,7 @@ where
     let protocol = poste_core::Protocol::from_sql_url(&connection_url).ok_or_else(|| {
         anyhow::anyhow!(
             "Cannot determine protocol from connection URL: {}",
-            crate::connection::mask_url_password(&connection_url)
+            poste_core::mask_url_password(&connection_url)
         )
     })?;
 

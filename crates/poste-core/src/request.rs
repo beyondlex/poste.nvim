@@ -58,6 +58,36 @@ impl Protocol {
     }
 }
 
+/// Mask the password portion of a connection URL for safe display.
+/// `postgres://user:secret@host/db` → `postgres://user:****@host/db`.
+///
+/// Every message that quotes a resolved connection URL goes through this —
+/// the URL carries the real password, and a CLI error line ends up in a
+/// terminal, in `:messages`, and in saved result files. The scan is confined
+/// to the authority (up to the first `/`, `?` or `#`): a database name may
+/// legally contain `@`, and treating that as userinfo would both hide the
+/// wrong segment and mangle the host.
+pub fn mask_url_password(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let rest = &url[scheme_end + 3..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let Some(at) = rest[..authority_end].rfind('@') else {
+        return url.to_string();
+    };
+    let userinfo = &rest[..at];
+    let Some(colon) = userinfo.rfind(':') else {
+        return url.to_string();
+    };
+    format!(
+        "{}{}:****{}",
+        &url[..scheme_end + 3],
+        &userinfo[..colon],
+        &rest[at..]
+    )
+}
+
 /// Replace the database name in a connection URL.
 /// "postgres://user:pass@host:5432/olddb" → "postgres://user:pass@host:5432/newdb"
 /// Handles URLs with or without auth, port, and existing database. Any query
@@ -82,7 +112,7 @@ pub fn replace_database_in_url(url: &str, new_db: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{replace_database_in_url, Protocol};
+    use super::{mask_url_password, replace_database_in_url, Protocol};
 
     #[test]
     fn sniffs_every_supported_scheme() {
@@ -127,6 +157,56 @@ mod tests {
         assert_eq!(Protocol::from_sql_url(""), None);
         // scheme sniffing is prefix-based and case-sensitive, like Lua's
         assert_eq!(Protocol::from_sql_url("PostgreSQL://h/db"), None);
+    }
+
+    #[test]
+    fn masks_password_but_keeps_rest() {
+        assert_eq!(
+            mask_url_password("postgres://alice:secret@db.example.com:5432/myapp"),
+            "postgres://alice:****@db.example.com:5432/myapp"
+        );
+        // an empty user with only a password is redis' usual form
+        assert_eq!(
+            mask_url_password("redis://:s3cr3t@cache.internal:6379/0"),
+            "redis://:****@cache.internal:6379/0"
+        );
+        // percent-encoded still masks (the raw value never reaches display)
+        assert_eq!(
+            mask_url_password("postgres://alice:p%40ss@db.example.com/myapp"),
+            "postgres://alice:****@db.example.com/myapp"
+        );
+    }
+
+    #[test]
+    fn leaves_urls_without_password_unchanged() {
+        assert_eq!(
+            mask_url_password("postgres://alice@db.example.com:5432/myapp"),
+            "postgres://alice@db.example.com:5432/myapp"
+        );
+        assert_eq!(
+            mask_url_password("sqlite:./data/app.db?mode=rwc"),
+            "sqlite:./data/app.db?mode=rwc"
+        );
+    }
+
+    #[test]
+    fn ignores_an_at_that_is_not_in_the_authority() {
+        // `@` is legal in a database name; treating it as userinfo separator
+        // hid nothing and mangled the host instead.
+        assert_eq!(
+            mask_url_password("postgres://db.example.com:5432/team@billing"),
+            "postgres://db.example.com:5432/team@billing"
+        );
+        // same through a query string
+        assert_eq!(
+            mask_url_password("postgres://db.example.com/team@x?sslmode=require"),
+            "postgres://db.example.com/team@x?sslmode=require"
+        );
+        // ... but a real password ahead of it still masks
+        assert_eq!(
+            mask_url_password("postgres://alice:secret@db.example.com/team@billing"),
+            "postgres://alice:****@db.example.com/team@billing"
+        );
     }
 
     #[test]
