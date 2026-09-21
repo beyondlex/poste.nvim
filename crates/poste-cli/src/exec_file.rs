@@ -175,7 +175,12 @@ fn resolve_connection(
 }
 
 fn extract_connection_directive(content: &str) -> Option<String> {
-    let re = regex::Regex::new(r"--\s*@connection\s+(.+)").ok()?;
+    // Anchored the same way `strip_sql_directives` recognises a directive line.
+    // The two must agree: a line that can name the connection is also a line
+    // removed from the SQL body, so an unanchored pattern let a comment
+    // trailing a statement (`SELECT 1; -- @connection postgres://…`) steer
+    // which database the file ran against while staying in the statements.
+    let re = regex::Regex::new(r"^\s*--\s*@connection\s+(.+)").ok()?;
     for line in content.lines() {
         if let Some(caps) = re.captures(line) {
             let val = caps[1].trim().to_string();
@@ -962,6 +967,34 @@ mod tests {
         );
         assert!(events.is_empty());
         assert_eq!(failed, 0);
+    }
+
+    /// A `-- @connection` directive must be a whole line, exactly the way
+    /// `strip_sql_directives` recognises one. Unanchored, a comment trailing a
+    /// statement supplied the connection while staying in the SQL body, so a
+    /// file could be pointed at a database no directive ever named.
+    #[test]
+    fn connection_directive_must_own_its_line() {
+        assert_eq!(
+            extract_connection_directive("SELECT 1; -- @connection postgres://stray:pw@h/db\n"),
+            None,
+            "a trailing comment on a statement line is not a directive"
+        );
+        assert_eq!(
+            extract_connection_directive("/* -- @connection postgres://in:block/db */\n"),
+            None,
+            "a directive inside a block comment is not a directive either"
+        );
+        // The real shapes still resolve, including leading whitespace and the
+        // no-space form strip_sql_directives also removes.
+        assert_eq!(
+            extract_connection_directive("-- @connection sqlite:/tmp/x.db\nSELECT 1;\n").as_deref(),
+            Some("sqlite:/tmp/x.db")
+        );
+        assert_eq!(
+            extract_connection_directive("   --@connection sqlite:/tmp/y.db\n").as_deref(),
+            Some("sqlite:/tmp/y.db")
+        );
     }
 
     #[test]
