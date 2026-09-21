@@ -35,7 +35,9 @@ next to cwd or the plugin dir → `poste` on PATH.
 Lua (e.g. `poste-db/lua/poste-db/connections.lua` `resolve_connection_url`)
 and Rust (`crates/poste-exec/src/sql_connection.rs`
 `ConnectionConfig::to_url()`) are **mirror implementations** of the same
-rules. Any change must be applied to every mirror in the same release:
+rules. Any change must be applied to every mirror in the same release. Not
+every rule lives in those two files — rules 4 and 5 have their own single
+home per side, named below, and are mirrors of each other too:
 
 1. `connections.toml` (walked up from the file/buffer directory), section
    `[<name>]`; the sibling only enumerates its own dialect sections.
@@ -49,6 +51,15 @@ rules. Any change must be applied to every mirror in the same release:
    — and must then be an integer in 1–65535; otherwise that one connection
    errors while the rest of the file still resolves (Rust carries the
    unparseable value in `ConnectionConfig::port_raw` until then).
+4. Scheme → protocol sniffing: Lua's `constants.URL_SCHEMES` and Rust's
+   `poste_core::Protocol::from_sql_url` (the one chain `exec-file`, `session`
+   and `introspect` share) accept the same prefixes — `sqlite:`,
+   `postgres://` + `postgresql://`, `mysql://` + `mariadb://`, `mssql://`,
+   `clickhouse://` — and nothing else. The alias schemes matter only for a
+   raw `url = "…"` entry, which bypasses rule 3's normalization.
+5. A message that quotes a resolved URL masks its password
+   (`poste_core::mask_url_password`, authority-only scan). The URL is the
+   credential carrier; the connection *name* is what may be printed.
 
 ## Subcommands
 
