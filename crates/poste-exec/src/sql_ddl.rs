@@ -23,6 +23,11 @@ pub struct TableSchema {
 }
 
 /// Trait for generating dialect-specific DDL statements.
+///
+/// Only [`DdlGenerator::create_table`] is called in production (the
+/// `sql_introspect` modules build a `TableSchema` and render it for "Show
+/// DDL"); the remaining members have no caller yet — the browser's column
+/// actions generate their ALTER SQL in Lua.
 pub trait DdlGenerator {
     fn create_table(&self, schema: &TableSchema) -> String;
     fn add_column(&self, table: &str, column: &ColumnDef) -> String;
@@ -37,6 +42,15 @@ pub trait DdlGenerator {
 // Shared helper
 // ---------------------------------------------------------------------------
 
+/// Emit only `name type [NOT NULL] [DEFAULT d]`.
+///
+/// `comment` and `extra` (auto_increment / identity) are deliberately NOT
+/// rendered here: they are dialect-syntax-specific and live on the struct for
+/// every dialect, so the caller that knows the dialect decides where they go —
+/// MySQL's `create_table` appends them inline, Postgres' emits `COMMENT ON`
+/// statements, SQLite/MSSQL/ClickHouse ignore them. A caller that forgets
+/// drops them silently, which is why the ALTER-style members below are not
+/// wired to any production path (see docs/REVIEW-2026-09-21.md).
 fn column_def_sql(col: &ColumnDef, quote: &dyn Fn(&str) -> String) -> String {
     let mut s = format!("{} {}", quote(&col.name), col.col_type);
     if !col.nullable {
