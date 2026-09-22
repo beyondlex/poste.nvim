@@ -169,6 +169,28 @@ fn ensure_sqlite_create_flag(path: &str) -> String {
     }
 }
 
+/// IPv6 literals must be bracketed to be legal in a URL authority
+/// (RFC 3986 §3.2.2), and the drivers' URL parsers enforce it:
+/// `postgres://::1:5432/db` is refused as `error with configuration: empty
+/// host` before a socket is opened, so a plain `host = "::1"` in
+/// connections.toml was unusable. Only hex digits plus colons count as an
+/// address, so the common mistake of leaving the port in the host field
+/// (`localhost:5432`) is not rewritten into something else. An already
+/// bracketed host passes through — that is the form that worked.
+/// Mirror of Lua `poste-db/connections.lua` `url_host` (same documented pair
+/// as `to_url` / `build_conn_url`).
+fn url_host(host: &str) -> String {
+    if host.starts_with('[') {
+        return host.to_string();
+    }
+    let looks_like_ipv6 =
+        host.contains(':') && host.chars().all(|c| c.is_ascii_hexdigit() || c == ':');
+    if looks_like_ipv6 {
+        return format!("[{}]", host);
+    }
+    host.to_string()
+}
+
 impl ConnectionConfig {
     /// Build a connection URL from the config.
     /// For SQLite, returns `sqlite:<path>[?mode=rwc]`.
@@ -209,7 +231,7 @@ impl ConnectionConfig {
                     _ => String::new(),
                 };
 
-                format!("{}://{}{}:{}/{}", scheme, auth, host, port, db)
+                format!("{}://{}{}:{}/{}", scheme, auth, url_host(host), port, db)
             }
             _ => String::new(),
         }
@@ -905,6 +927,44 @@ mod tests {
             extra_params: HashMap::new(),
         };
         assert_eq!(config.to_url(), "postgres://localhost:5432/my%20db%2Fprod");
+    }
+
+    #[test]
+    fn test_to_url_brackets_ipv6_hosts() {
+        let with_host = |host: &str| ConnectionConfig {
+            dialect: "postgres".to_string(),
+            host: Some(host.to_string()),
+            port: Some(5432),
+            database: Some("db".to_string()),
+            user: None,
+            password: None,
+            path: None,
+            ssl_mode: None,
+            port_raw: None,
+            extra_params: HashMap::new(),
+        };
+        // Brackets are what the driver's URL parser needs: without them
+        // `postgres://::1:5432/db` is refused as `empty host` (measured against
+        // `poste introspect`) before any socket is opened.
+        assert_eq!(with_host("::1").to_url(), "postgres://[::1]:5432/db");
+        assert_eq!(
+            with_host("fe80::1").to_url(),
+            "postgres://[fe80::1]:5432/db"
+        );
+        // Already bracketed passes through; a port left in the host field is a
+        // config mistake this must not rewrite into a different string.
+        for host in [
+            "[::1]",
+            "localhost:5432",
+            "db.internal",
+            "10.0.0.1",
+            "abcdef",
+        ] {
+            assert_eq!(
+                with_host(host).to_url(),
+                format!("postgres://{}:5432/db", host)
+            );
+        }
     }
 
     // ---- connections.toml store (the documented sibling-shared format) ----
