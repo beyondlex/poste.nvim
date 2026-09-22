@@ -252,6 +252,25 @@ fn items_shape(arr: &[redis::Value], type_name: &str, max_items: usize, max_byte
     json!({"type": type_name, "value": items, "len": len, "truncated": truncated})
 }
 
+/// A double for JSON. serde_json has no spelling for the non-finite values —
+/// `json!(f64::INFINITY)` is `null` — so a zset member at infinity lost its
+/// score on screen ("(nil)") and a ZSCORE of inf arrived as a number-shaped
+/// null. What goes out instead is the spelling Redis itself uses: on a live
+/// 8.4 server `ZADD z inf m` is accepted and `ZSCORE`/`ZRANGE WITHSCORES`
+/// answer `inf` / `-inf`, so the text is what the user can paste straight back
+/// into `ZADD` (LuaJIT's `tonumber` reads both). `nan` is a score the same
+/// server rejects, so that arm only guards a reply that carries one anyway —
+/// it exists because the bug being fixed is a value turning into null.
+fn number_json(v: f64) -> Value {
+    if v.is_nan() {
+        json!("nan")
+    } else if v.is_infinite() {
+        json!(if v > 0.0 { "inf" } else { "-inf" })
+    } else {
+        json!(v)
+    }
+}
+
 fn hex_preview(bytes: &[u8], limit: usize) -> String {
     bytes
         .iter()
@@ -427,15 +446,21 @@ pub fn redis_value_to_json(
                         if chunk.len() == 2 {
                             let member = key_display(&chunk[0]);
                             let score = match &chunk[1] {
-                                redis::Value::BulkString(b) => {
-                                    String::from_utf8_lossy(b).parse::<f64>().unwrap_or(0.0)
-                                }
+                                // A score this side cannot read is not a score
+                                // of 0. `number_json` turns NaN into `nan`,
+                                // which says "not a number" where 0.0 would
+                                // show a plausible value — and ZADD of `nan`
+                                // fails loudly instead of filing the member
+                                // under a score it never had.
+                                redis::Value::BulkString(b) => String::from_utf8_lossy(b)
+                                    .parse::<f64>()
+                                    .unwrap_or(f64::NAN),
                                 // RESP3 (`?protocol=resp3`) scores arrive typed
                                 redis::Value::Double(f) => *f,
                                 redis::Value::Int(n) => *n as f64,
-                                _ => 0.0,
+                                _ => f64::NAN,
                             };
-                            items.push(json!({"member": member, "score": score}));
+                            items.push(json!({"member": member, "score": number_json(score)}));
                         }
                     }
                     json!({"type": "zset", "value": items, "len": len / 2, "truncated": truncated})
@@ -491,7 +516,7 @@ pub fn redis_value_to_json(
         // RESP3 scalars: without these arms every one of them fell into the
         // debug-format `unknown` shape, so the panel printed `Double(1.5)`
         // where the user asked for a number.
-        redis::Value::Double(f) => json!({"type": "number", "value": f}),
+        redis::Value::Double(f) => json!({"type": "number", "value": number_json(*f)}),
         redis::Value::Boolean(b) => json!({"type": "boolean", "value": b}),
         // Big numbers keep their digits as text: as an f64 they would silently
         // round (same rule the SQL side applies to wide integers).
@@ -802,6 +827,45 @@ mod tests {
         ];
         let out = redis_value_to_json(&redis::Value::Array(arr), "ZRANGE", 100, 1024);
         assert_eq!(out["value"][0]["score"], json!(99.5));
+    }
+
+    #[test]
+    fn non_finite_scores_keep_the_redis_spelling() {
+        // serde_json has no spelling for the non-finite doubles —
+        // `json!(f64::INFINITY)` is null (measured: this assertion failed with
+        // `left: Null` before number_json existed) — so a member at infinity
+        // showed its score as "(nil)". `inf`/`-inf` are what a live redis
+        // answers for such a score and what its ZADD accepts, so the text is
+        // pasteable back; `nan` covers a reply that is not a float at all.
+        let arr = vec![
+            redis::Value::BulkString(b"m".to_vec()),
+            redis::Value::BulkString(b"inf".to_vec()),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "ZRANGE", 100, 1024);
+        assert_eq!(out["value"][0]["score"], json!("inf"));
+
+        let arr = vec![
+            redis::Value::BulkString(b"m".to_vec()),
+            redis::Value::Double(f64::NEG_INFINITY),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "ZRANGE", 100, 1024);
+        assert_eq!(out["value"][0]["score"], json!("-inf"));
+
+        let out = redis_value_to_json(&redis::Value::Double(f64::NAN), "ZSCORE", 100, 1024);
+        assert_eq!(out["type"], "number");
+        assert_eq!(out["value"], json!("nan"));
+
+        // finite scores stay numbers
+        let out = redis_value_to_json(&redis::Value::Double(1.5), "ZSCORE", 100, 1024);
+        assert_eq!(out["value"], json!(1.5));
+
+        // A score that is not a float reads as `nan`, not as 0.0
+        let arr = vec![
+            redis::Value::BulkString(b"m".to_vec()),
+            redis::Value::BulkString(b"not-a-score".to_vec()),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "ZRANGE", 100, 1024);
+        assert_eq!(out["value"][0]["score"], json!("nan"));
     }
 
     #[test]
