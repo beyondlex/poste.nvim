@@ -436,6 +436,21 @@ mod tests {
     }
 
     #[test]
+    fn rejection_message_hides_the_password() {
+        // The realistic leak: a SQL entry pasted into a redis slot. The
+        // message is shown in the panel's error block, so the credential next
+        // to the host must not come along with it.
+        let err = validate_connection_url("postgres://alice:s3cret@db.example.com:5432/myapp")
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("s3cret"), "password leaked into {err}");
+        assert!(
+            err.contains("postgres://alice:****@db.example.com:5432/myapp"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn scalar_values() {
         assert_eq!(
             redis_value_to_json(&redis::Value::Nil, "GET", 100, 1024),

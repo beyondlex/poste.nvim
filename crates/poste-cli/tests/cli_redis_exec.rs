@@ -100,13 +100,22 @@ fn redis_exec_rejects_non_redis_urls() {
         .stdin
         .take()
         .unwrap()
-        .write_all(br#"{"connection":"postgres://x/y","commands":[["PING"]]}"#)
+        .write_all(
+            br#"{"connection":"postgres://alice:s3cret@x/y","commands":[["PING"]]}"#.as_slice(),
+        )
         .unwrap();
     let out = child.wait_with_output().unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("Not a redis connection URL"),
+        "stderr: {stderr}"
+    );
+    // The message names the offending URL for diagnosis — the credential in it
+    // must not come along, since this text lands in the plugin's error panel.
+    assert!(!stderr.contains("s3cret"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("postgres://alice:****@x/y"),
         "stderr: {stderr}"
     );
 }

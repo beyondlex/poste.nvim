@@ -568,6 +568,15 @@ mod tests {
     }
 
     #[test]
+    fn rejection_message_hides_the_password() {
+        let err = validate_connection_url("redis://bob:s3cret@h:6372/%2F")
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("s3cret"), "password leaked into {err}");
+        assert!(err.contains("redis://bob:****@h:6372/%2F"), "{err}");
+    }
+
+    #[test]
     fn parses_uri_with_vhost() {
         let uri = parse_uri("amqp://bob:s3cret@localhost:5672/%2F").unwrap();
         assert_eq!(uri.vhost, "/");
