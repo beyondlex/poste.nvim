@@ -207,8 +207,8 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize) -> Value {
                 Value::Null
             }
         }
-        "FLOAT" => value::opt_json(row.try_get::<Option<f32>, _>(idx).ok().flatten()),
-        "DOUBLE" => value::opt_json(row.try_get::<Option<f64>, _>(idx).ok().flatten()),
+        "FLOAT" => value::opt_float_json(row.try_get::<Option<f32>, _>(idx).ok().flatten()),
+        "DOUBLE" => value::opt_float_json(row.try_get::<Option<f64>, _>(idx).ok().flatten()),
         "DECIMAL" => {
             let val: Option<rust_decimal::Decimal> = row.try_get::<_, _>(idx).ok().flatten();
             val.map(value::decimal_json).unwrap_or(Value::Null)

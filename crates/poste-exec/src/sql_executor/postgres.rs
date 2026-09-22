@@ -218,8 +218,8 @@ fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
                 .map(|v| v as i64),
         ),
         "INT8" => value::opt_int_json(row.try_get::<Option<i64>, _>(idx).ok().flatten()),
-        "FLOAT4" => value::opt_json(row.try_get::<Option<f32>, _>(idx).ok().flatten()),
-        "FLOAT8" => value::opt_json(row.try_get::<Option<f64>, _>(idx).ok().flatten()),
+        "FLOAT4" => value::opt_float_json(row.try_get::<Option<f32>, _>(idx).ok().flatten()),
+        "FLOAT8" => value::opt_float_json(row.try_get::<Option<f64>, _>(idx).ok().flatten()),
         "NUMERIC" => {
             let val: Option<rust_decimal::Decimal> = row.try_get::<_, _>(idx).ok().flatten();
             val.map(value::decimal_json).unwrap_or(Value::Null)

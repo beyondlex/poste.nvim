@@ -10,6 +10,18 @@ pub(super) fn opt_json<T: serde::Serialize>(v: Option<T>) -> Value {
     v.map(|v| json!(v)).unwrap_or(Value::Null)
 }
 
+/// Float cells go through the shared converter rather than `opt_json`, which
+/// turns a non-finite double into `null` — the editor would read `Infinity` as
+/// NULL and write NULL back over it on commit. Shared with the CLI path in
+/// `sql_values` so the two converters cannot drift apart.
+pub(super) fn float_json<T: Into<f64> + Copy>(v: T) -> Value {
+    crate::sql_values::float_json(v)
+}
+
+pub(super) fn opt_float_json<T: Into<f64> + Copy>(v: Option<T>) -> Value {
+    v.map(float_json).unwrap_or(Value::Null)
+}
+
 /// Serialize an i64 as a JSON number when it fits exactly in a double
 /// (|v| < 2^53), otherwise as a JSON string to preserve every digit.
 /// Without this, e.g. bigint 2084515900853196878 decodes as

@@ -21,7 +21,7 @@ pub fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize, _col_type
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
-        return json!(v);
+        return float_json(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
         if let Some(parsed) = poste_core::sql_parser::parse_json_cell(&v) {
@@ -118,7 +118,7 @@ pub fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str)
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
-        return json!(v);
+        return float_json(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) {
         return json!(v);
@@ -141,6 +141,31 @@ pub fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, col_type: &str)
         return json!(v);
     }
     Value::Null
+}
+
+/// Serialize a float, keeping the values the engines answer with for the three
+/// doubles JSON cannot name. `json!(f64::INFINITY)` is `null` (see
+/// `a_json_number_cannot_carry_infinity`), so without this an infinite or
+/// NaN `float8` cell arrives as NULL and a commit writes NULL over it. The
+/// spellings below are what postgres prints and parses back for those values.
+pub fn float_json<T: Into<f64> + Copy>(v: T) -> Value {
+    let v: f64 = v.into();
+    if v.is_finite() {
+        return json!(v);
+    }
+    if v.is_nan() {
+        json!("NaN")
+    } else if v > 0.0 {
+        json!("Infinity")
+    } else {
+        json!("-Infinity")
+    }
+}
+
+/// `float_json` for a nullable cell: NULL stays NULL, and the non-finite
+/// doubles become the text above rather than NULL by accident.
+pub fn opt_float_json<T: Into<f64> + Copy>(v: Option<T>) -> Value {
+    v.map(float_json).unwrap_or(Value::Null)
 }
 
 /// Render raw bytes (BINARY/BLOB columns) as uppercase hex, matching
@@ -242,7 +267,7 @@ pub fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col_type: &s
         return json!(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
-        return json!(v);
+        return float_json(v);
     }
     if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) {
         return json!(v);
@@ -272,7 +297,8 @@ pub fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col_type: &s
 
 #[cfg(test)]
 mod tests {
-    use super::mysql_binary_to_hex;
+    use super::{float_json, mysql_binary_to_hex, opt_float_json};
+    use serde_json::{json, Value};
 
     #[test]
     fn binary_to_hex_matches_mysql_hex() {
@@ -286,5 +312,41 @@ mod tests {
             mysql_binary_to_hex(&[0xFF, 0x00, 0x10, 0x1F, 0xA5, 0x5A]),
             "FF00101FA55A"
         );
+    }
+
+    /// The premise `float_json` exists for: serde_json has no spelling for a
+    /// non-finite double, so it serializes to `null`. A postgres `float8`
+    /// holding `Infinity` therefore reached the editor as NULL, and committing
+    /// that row wrote NULL over the value.
+    #[test]
+    fn a_json_number_cannot_carry_infinity() {
+        assert_eq!(json!(f64::INFINITY), Value::Null);
+        assert_eq!(json!(f64::NEG_INFINITY), Value::Null);
+        assert_eq!(json!(f64::NAN), Value::Null);
+    }
+
+    #[test]
+    fn float_json_keeps_the_non_finite_values_as_their_engine_spelling() {
+        assert_eq!(float_json(f64::INFINITY), json!("Infinity"));
+        assert_eq!(float_json(f64::NEG_INFINITY), json!("-Infinity"));
+        assert_eq!(float_json(f64::NAN), json!("NaN"));
+        // f32 arrives through the same helper (FLOAT4 / FLOAT)
+        assert_eq!(float_json(f32::INFINITY), json!("Infinity"));
+        assert_eq!(float_json(f32::NAN), json!("NaN"));
+    }
+
+    #[test]
+    fn float_json_leaves_finite_doubles_as_numbers() {
+        assert_eq!(float_json(1.5_f64), json!(1.5));
+        assert_eq!(float_json(0.0_f64), json!(0.0));
+        // -0.0 is finite: it stays a number, and `= -0.0` matches in SQL
+        assert_eq!(float_json(-0.0_f64), json!(-0.0));
+        assert_eq!(float_json(f64::MAX), json!(f64::MAX));
+    }
+
+    #[test]
+    fn opt_float_json_maps_none_to_null() {
+        assert_eq!(opt_float_json(None::<f64>), Value::Null);
+        assert_eq!(opt_float_json(Some(f64::NAN)), json!("NaN"));
     }
 }

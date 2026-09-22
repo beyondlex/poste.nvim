@@ -151,7 +151,7 @@ fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize) -> Value {
     }
 
     if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
-        return json!(v);
+        return value::float_json(v);
     }
 
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
@@ -166,4 +166,43 @@ fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize) -> Value {
     }
 
     Value::Null
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sqlite_value_to_json;
+    use serde_json::json;
+
+    /// The converter as the executor actually wires it, against a real database
+    /// (an in-memory one): SQLite stores `9e999` as an infinite REAL, and a
+    /// non-finite double has no JSON spelling, so the cell reached the editor as
+    /// NULL — which the grid showed as an empty value and a commit wrote back.
+    #[tokio::test]
+    async fn an_infinite_real_reaches_the_wire_as_text_not_null() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE t (x REAL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for stmt in [
+            "INSERT INTO t VALUES (9e999)",
+            "INSERT INTO t VALUES (-9e999)",
+            "INSERT INTO t VALUES (1.5)",
+        ] {
+            sqlx::query(stmt).execute(&pool).await.unwrap();
+        }
+        let rows = sqlx::query("SELECT x FROM t ORDER BY rowid")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sqlite_value_to_json(&rows[0], 0), json!("Infinity"));
+        assert_eq!(sqlite_value_to_json(&rows[1], 0), json!("-Infinity"));
+        assert_eq!(sqlite_value_to_json(&rows[2], 0), json!(1.5));
+        pool.close().await;
+    }
 }

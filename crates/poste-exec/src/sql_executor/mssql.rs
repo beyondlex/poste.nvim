@@ -238,8 +238,10 @@ pub fn mssql_value_to_json(row: &tiberius::Row, idx: usize) -> Value {
             value::opt_json(row.try_get::<i32, _>(idx).ok().flatten().map(|v| v as i64))
         }
         Some(CT::Int8 | CT::Intn) => value::opt_int_json(row.try_get::<i64, _>(idx).ok().flatten()),
-        Some(CT::Float4) => value::opt_json(row.try_get::<f32, _>(idx).ok().flatten()),
-        Some(CT::Float8 | CT::Floatn) => value::opt_json(row.try_get::<f64, _>(idx).ok().flatten()),
+        Some(CT::Float4) => value::opt_float_json(row.try_get::<f32, _>(idx).ok().flatten()),
+        Some(CT::Float8 | CT::Floatn) => {
+            value::opt_float_json(row.try_get::<f64, _>(idx).ok().flatten())
+        }
         Some(CT::Decimaln | CT::Numericn) => {
             let v: Option<rust_decimal::Decimal> = row.try_get(idx).ok().flatten();
             v.map(value::decimal_json).unwrap_or(Value::Null)
