@@ -144,6 +144,12 @@ fn redis_type_name(val: &redis::Value) -> &'static str {
         redis::Value::SimpleString(_) | redis::Value::BulkString(_) => "string",
         redis::Value::Array(_) => "list",
         redis::Value::Map(_) => "hash",
+        // RESP3-typed replies (`?protocol=resp3` in the connection URL)
+        redis::Value::Set(_) => "set",
+        redis::Value::Double(_) => "number",
+        redis::Value::Boolean(_) => "boolean",
+        redis::Value::BigNumber(_) => "integer",
+        redis::Value::VerbatimString { .. } => "string",
         _ => "unknown",
     }
 }
@@ -177,6 +183,10 @@ fn status_text(val: &redis::Value, max_bytes: usize) -> String {
         redis::Value::Int(n) => n.to_string(),
         redis::Value::Array(a) => format!("{} elements", a.len()),
         redis::Value::Map(m) => format!("{} entries", m.len()),
+        redis::Value::Set(s) => format!("{} elements", s.len()),
+        redis::Value::Double(f) => f.to_string(),
+        redis::Value::Boolean(b) => b.to_string(),
+        redis::Value::BigNumber(n) => n.to_string(),
         // SimpleString/BulkString: show the payload itself (PING → PONG,
         // GET → the value), matching redis-cli's reply rendering
         redis::Value::SimpleString(s) => cap_bytes(s, max_bytes).0.to_string(),
@@ -196,6 +206,52 @@ fn key_string(val: &redis::Value) -> Option<String> {
     }
 }
 
+/// Pair-key display (`hash` field names, `zset`/stream members). Unlike
+/// `key_string` it always produces text: a key that is not a plain string
+/// (RESP3 maps can carry integer or nested keys) used to fail the extraction,
+/// and the arm dropped the whole pair — `len` still counted it, so the panel
+/// showed a collection with rows missing and no trace of why.
+fn key_display(val: &redis::Value) -> String {
+    match val {
+        // A non-UTF-8 field name is still a field: `key_string` renders it
+        // lossily (one replacement char per byte), so show hex instead.
+        redis::Value::BulkString(b) if std::str::from_utf8(b).is_err() => {
+            format!("hex:{}", hex_preview(b, 16))
+        }
+        // A typed key (RESP3 maps can carry integer keys) still names a row.
+        redis::Value::Int(n) => n.to_string(),
+        redis::Value::Double(f) => f.to_string(),
+        redis::Value::Boolean(b) => b.to_string(),
+        redis::Value::BigNumber(n) => n.to_string(),
+        other => key_string(other).unwrap_or_else(|| format!("(redis {})", redis_type_name(other))),
+    }
+}
+
+/// A child reply in a nested position (hash value column, list/set element):
+/// the cell holds the child's scalar, or the child's whole shape when it has
+/// no `value` key at all — a nested `hash` has `entries`, and flattening it to
+/// JSON null hid a value that is very much there.
+fn child_cell(val: &redis::Value, max_items: usize, max_bytes: usize) -> Value {
+    let child = redis_value_to_json(val, "", max_items, max_bytes);
+    match child.get("value") {
+        Some(v) => v.clone(),
+        None => child,
+    }
+}
+
+/// Flat collection shape (`{"type": t, "value": [...], "len", "truncated"}`)
+/// for item lists with no pair structure: list/set replies and RESP3 sets.
+fn items_shape(arr: &[redis::Value], type_name: &str, max_items: usize, max_bytes: usize) -> Value {
+    let len = arr.len();
+    let truncated = len > max_items;
+    let items: Vec<Value> = arr
+        .iter()
+        .take(max_items)
+        .map(|v| child_cell(v, max_items, max_bytes))
+        .collect();
+    json!({"type": type_name, "value": items, "len": len, "truncated": truncated})
+}
+
 fn hex_preview(bytes: &[u8], limit: usize) -> String {
     bytes
         .iter()
@@ -209,10 +265,15 @@ fn hex_preview(bytes: &[u8], limit: usize) -> String {
 /// Lua side:
 /// - strings carry `parsed` when the payload itself is valid JSON and fits
 ///   `max_bytes`, plus `len`/`truncated` beyond it
-/// - non-UTF-8 payloads become `{"type":"binary","encoding":"hex",...}`
+/// - non-UTF-8 payloads become `{"type":"binary","encoding":"hex",...}`, and
+///   that shape carries a one-line `value` too, because nested cells take the
+///   child's `value` (see `child_cell`)
 /// - arrays infer list/set/hash/zset/stream from the command (HGETALL &
 ///   friends → `entries` pairs); `len`/`truncated` beyond `max_items`
 /// - Redis 7 native maps use the same `entries` shape as inferred hashes
+/// - RESP3 typed replies (`?protocol=resp3` in the URL) map onto the shapes
+///   above: sets to `set`, doubles/booleans/big numbers to scalars, verbatim
+///   strings to `string`, attributes to their payload
 pub fn redis_value_to_json(
     val: &redis::Value,
     cmd_name: &str,
@@ -226,6 +287,9 @@ pub fn redis_value_to_json(
         redis::Value::SimpleString(s) => json!({"type": "string", "value": s}),
         redis::Value::BulkString(b) => {
             let total = b.len();
+            // UTF-8 validity is the whole binary/text split: a NUL-containing
+            // payload stays text (the Lua renderer escapes control characters
+            // for the grid), while one stray 0xff byte makes the value binary.
             match std::str::from_utf8(b) {
                 Ok(s) => {
                     let (shown, truncated) = cap_bytes(s, max_bytes);
@@ -250,12 +314,21 @@ pub fn redis_value_to_json(
                     }
                     obj
                 }
-                Err(_) => json!({
-                    "type": "binary",
-                    "encoding": "hex",
-                    "bytes": total,
-                    "preview": hex_preview(b, 64),
-                }),
+                Err(_) => {
+                    // `value` is the same one-line summary the Lua text
+                    // renderer builds: a hash field or list element holding a
+                    // protobuf/msgpack blob is a nested cell, and those take
+                    // the child's `value` — without it the row showed "(nil)",
+                    // i.e. an apparently empty field that really has bytes.
+                    let preview = hex_preview(b, 64);
+                    json!({
+                        "type": "binary",
+                        "encoding": "hex",
+                        "bytes": total,
+                        "preview": preview,
+                        "value": format!("(binary) {} bytes hex: {}", total, preview),
+                    })
+                }
             }
         }
         redis::Value::Array(arr) => {
@@ -341,11 +414,9 @@ pub fn redis_value_to_json(
                     let mut entries = Vec::with_capacity(shown_len / 2 + 1);
                     for chunk in arr[..shown_len].chunks(2) {
                         if chunk.len() == 2 {
-                            if let Some(key) = key_string(&chunk[0]) {
-                                let value =
-                                    redis_value_to_json(&chunk[1], "", max_items, max_bytes);
-                                entries.push(json!([key, value["value"].clone()]));
-                            }
+                            let key = key_display(&chunk[0]);
+                            let value = child_cell(&chunk[1], max_items, max_bytes);
+                            entries.push(json!([key, value]));
                         }
                     }
                     json!({"type": "hash", "entries": entries, "len": len / 2, "truncated": truncated})
@@ -354,11 +425,13 @@ pub fn redis_value_to_json(
                     let mut items = Vec::with_capacity(shown_len / 2 + 1);
                     for chunk in arr[..shown_len].chunks(2) {
                         if chunk.len() == 2 {
-                            let member = key_string(&chunk[0]).unwrap_or_default();
+                            let member = key_display(&chunk[0]);
                             let score = match &chunk[1] {
                                 redis::Value::BulkString(b) => {
                                     String::from_utf8_lossy(b).parse::<f64>().unwrap_or(0.0)
                                 }
+                                // RESP3 (`?protocol=resp3`) scores arrive typed
+                                redis::Value::Double(f) => *f,
                                 redis::Value::Int(n) => *n as f64,
                                 _ => 0.0,
                             };
@@ -373,15 +446,15 @@ pub fn redis_value_to_json(
                     for entry in arr.iter().take(shown_len) {
                         if let redis::Value::Array(pair) = entry {
                             if pair.len() == 2 {
-                                let id = key_string(&pair[0]).unwrap_or_default();
+                                let id = key_display(&pair[0]);
                                 let fields = match &pair[1] {
                                     redis::Value::Array(f) => {
                                         let mut out = Vec::new();
                                         for chunk in f.chunks(2) {
                                             if chunk.len() == 2 {
                                                 out.push(json!([
-                                                    key_string(&chunk[0]).unwrap_or_default(),
-                                                    key_string(&chunk[1]).unwrap_or_default(),
+                                                    key_display(&chunk[0]),
+                                                    key_display(&chunk[1]),
                                                 ]));
                                             }
                                         }
@@ -395,14 +468,7 @@ pub fn redis_value_to_json(
                     }
                     json!({"type": "stream", "value": items, "len": len, "truncated": truncated})
                 }
-                other => {
-                    let items: Vec<Value> = arr
-                        .iter()
-                        .take(shown_len)
-                        .map(|v| redis_value_to_json(v, "", max_items, max_bytes)["value"].clone())
-                        .collect();
-                    json!({"type": other, "value": items, "len": len, "truncated": truncated})
-                }
+                other => items_shape(arr, other, max_items, max_bytes),
             }
         }
         redis::Value::Map(m) => {
@@ -410,13 +476,40 @@ pub fn redis_value_to_json(
             let truncated = len > max_items;
             let mut entries = Vec::with_capacity(len.min(max_items));
             for (k, v) in m.iter().take(max_items) {
-                if let Some(key) = key_string(k) {
-                    let value = redis_value_to_json(v, "", max_items, max_bytes);
-                    entries.push(json!([key, value["value"].clone()]));
-                }
+                let key = key_display(k);
+                let value = child_cell(v, max_items, max_bytes);
+                entries.push(json!([key, value]));
             }
             json!({"type": "hash", "entries": entries, "len": len, "truncated": truncated})
         }
+        redis::Value::Set(items) => {
+            // SMEMBERS/ZRANGE under RESP3 (`?protocol=resp3` in the URL) arrive
+            // typed as a set. Left to the array heuristic they would read as a
+            // list — or, when the member count is even, as a hash of "pairs".
+            items_shape(items, "set", max_items, max_bytes)
+        }
+        // RESP3 scalars: without these arms every one of them fell into the
+        // debug-format `unknown` shape, so the panel printed `Double(1.5)`
+        // where the user asked for a number.
+        redis::Value::Double(f) => json!({"type": "number", "value": f}),
+        redis::Value::Boolean(b) => json!({"type": "boolean", "value": b}),
+        // Big numbers keep their digits as text: as an f64 they would silently
+        // round (same rule the SQL side applies to wide integers).
+        redis::Value::BigNumber(n) => json!({"type": "integer", "value": n.to_string()}),
+        // INFO and friends reply verbatim under RESP3: `format` is metadata,
+        // the text is the value.
+        redis::Value::VerbatimString { text, .. } => json!({
+            "type": "string",
+            "value": text,
+            "len": text.len(),
+        }),
+        // Attributes are side metadata; the payload is what was asked for.
+        redis::Value::Attribute { data, .. } => {
+            redis_value_to_json(data, cmd_name, max_items, max_bytes)
+        }
+        // `ServerError` (an error typed *inside* a RESP3 collection) and `Push`
+        // get no shape of their own: the debug-format arm below keeps their
+        // text on screen, which is all a reply like that asks for.
         _ => json!({"type": "unknown", "value": format!("{:?}", val)}),
     }
 }
@@ -564,6 +657,125 @@ mod tests {
         assert_eq!(out["encoding"], "hex");
         assert_eq!(out["bytes"], 4);
         assert_eq!(out["preview"], "48 65 ff 00");
+        // Nested cells read `value`, so the shape has to carry one
+        assert_eq!(out["value"], "(binary) 4 bytes hex: 48 65 ff 00");
+    }
+
+    #[test]
+    fn binary_field_value_is_visible_in_a_hash_row() {
+        // HGETALL of a msgpack/protobuf field: flattening took the child's
+        // `value`, which the binary shape did not have, so the panel printed
+        // "(nil)" for a field holding 4 bytes.
+        let arr = vec![
+            redis::Value::BulkString(b"blob".to_vec()),
+            redis::Value::BulkString(vec![0x48, 0x65, 0xff, 0x00]),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "HGETALL", 100, 1024);
+        assert_eq!(out["entries"][0][0], "blob");
+        assert_eq!(out["entries"][0][1], "(binary) 4 bytes hex: 48 65 ff 00");
+    }
+
+    #[test]
+    fn binary_element_is_visible_in_a_list() {
+        // 0xff is what makes this binary: UTF-8 validity is the test, so a
+        // NUL-only payload would stay a (control-char) string on purpose
+        let arr = vec![
+            redis::Value::BulkString(b"ok".to_vec()),
+            redis::Value::BulkString(vec![0xff, 0x00]),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "LRANGE", 100, 1024);
+        assert_eq!(out["type"], "list");
+        assert_eq!(out["value"], json!(["ok", "(binary) 2 bytes hex: ff 00"]));
+    }
+
+    #[test]
+    fn nested_collection_child_keeps_its_shape() {
+        // A RESP3 map whose value is itself a map: `entries` cells take the
+        // child's `value`, which a list has — but a nested *hash* has only
+        // `entries`, and flattening it produced a null row.
+        let inner = redis::Value::Map(vec![(
+            redis::Value::BulkString(b"f".to_vec()),
+            redis::Value::BulkString(b"v".to_vec()),
+        )]);
+        let outer = redis::Value::Map(vec![(redis::Value::BulkString(b"nested".to_vec()), inner)]);
+        let out = redis_value_to_json(&outer, "XREAD", 100, 1024);
+        assert_eq!(out["entries"][0][0], "nested");
+        assert_eq!(out["entries"][0][1]["type"], "hash");
+        assert_eq!(out["entries"][0][1]["entries"], json!([["f", "v"]]));
+    }
+
+    #[test]
+    fn non_string_map_key_still_names_its_row() {
+        let outer = redis::Value::Map(vec![(
+            redis::Value::Int(5),
+            redis::Value::BulkString(b"v".to_vec()),
+        )]);
+        let out = redis_value_to_json(&outer, "COMMAND", 100, 1024);
+        assert_eq!(out["entries"], json!([["5", "v"]]));
+        assert_eq!(out["len"], 1);
+    }
+
+    #[test]
+    fn json_heuristic_respects_the_byte_cap() {
+        // `parsed` used to parse the *untruncated* string, so a 200 MB JSON
+        // blob arrived capped at 64 KB plus its full parsed tree
+        let raw = format!(r#"{{"a": "{}"}}"#, "x".repeat(200)).into_bytes();
+        let out = redis_value_to_json(&redis::Value::BulkString(raw), "GET", 100, 64);
+        assert_eq!(out["truncated"], json!(true));
+        assert!(
+            out.get("parsed").is_none(),
+            "parsed must not bypass max_bytes"
+        );
+        // the same document within the cap still surfaces its parsed form
+        let small = br#"{"a": 1}"#.to_vec();
+        let out = redis_value_to_json(&redis::Value::BulkString(small), "GET", 100, 64);
+        assert_eq!(out["parsed"], json!({"a": 1}));
+    }
+
+    #[test]
+    fn resp3_set_stays_a_set() {
+        // Two members is an even count of flat strings — the array heuristic
+        // would have read this SMEMBERS reply as a hash of "pairs"
+        let set = redis::Value::Set(vec![
+            redis::Value::BulkString(b"alice".to_vec()),
+            redis::Value::BulkString(b"bob".to_vec()),
+        ]);
+        let out = redis_value_to_json(&set, "SMEMBERS", 100, 1024);
+        assert_eq!(out["type"], "set");
+        assert_eq!(out["value"], json!(["alice", "bob"]));
+        assert_eq!(out["len"], 2);
+    }
+
+    #[test]
+    fn resp3_scalars_get_real_shapes() {
+        let out = redis_value_to_json(&redis::Value::Double(1.5), "GET", 100, 1024);
+        assert_eq!(out, json!({"type": "number", "value": 1.5}));
+        let out = redis_value_to_json(&redis::Value::Boolean(true), "COPY", 100, 1024);
+        assert_eq!(out, json!({"type": "boolean", "value": true}));
+        let out = redis_value_to_json(
+            &redis::Value::VerbatimString {
+                format: redis::VerbatimFormat::Text,
+                text: "redis_version:7.4.0".into(),
+            },
+            "INFO",
+            100,
+            1024,
+        );
+        assert_eq!(out["type"], "string");
+        assert_eq!(out["value"], "redis_version:7.4.0");
+        // no debug-format "Double(1.5)" anywhere
+        assert_eq!(redis_type_name(&redis::Value::Double(1.5)), "number");
+        assert_eq!(status_text(&redis::Value::Double(1.5), usize::MAX), "1.5");
+    }
+
+    #[test]
+    fn resp3_double_score_reads_as_a_number() {
+        let arr = vec![
+            redis::Value::BulkString(b"alice".to_vec()),
+            redis::Value::Double(99.5),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "ZRANGE", 100, 1024);
+        assert_eq!(out["value"][0]["score"], json!(99.5));
     }
 
     #[test]
