@@ -676,6 +676,32 @@ mod tests {
     }
 
     #[test]
+    fn non_utf8_names_are_display_only_hex() {
+        // The NAME of a hash field / zset member is text the panel has to send
+        // back verbatim for `i`/`dd` to hit that entry, and these bytes cannot
+        // survive the trip — so `key_display` says "not a name you can type"
+        // rather than handing over replacement chars. Pinned because
+        // poste-redis' grid_edit refuses writes on rows whose name looks like
+        // this (`util.is_hex_display`); change the marker and that guard stops
+        // firing while the wrong-name write comes back.
+        let arr = vec![
+            redis::Value::BulkString(vec![0xff, 0xfe]),
+            redis::Value::BulkString(b"v".to_vec()),
+        ];
+        let out = redis_value_to_json(&redis::Value::Array(arr), "HGETALL", 100, 1024);
+        assert_eq!(out["entries"][0][0], "hex:ff fe");
+
+        // 0xc3 0x28 is an invalid continuation byte, not just a control char
+        let zarr = vec![
+            redis::Value::BulkString(vec![0xc3, 0x28]),
+            redis::Value::BulkString(b"1".to_vec()),
+        ];
+        let zout = redis_value_to_json(&redis::Value::Array(zarr), "ZRANGE", 100, 1024);
+        assert_eq!(zout["value"][0]["member"], "hex:c3 28");
+        assert_eq!(zout["value"][0]["score"], 1.0);
+    }
+
+    #[test]
     fn binary_element_is_visible_in_a_list() {
         // 0xff is what makes this binary: UTF-8 validity is the test, so a
         // NUL-only payload would stay a (control-char) string on purpose
