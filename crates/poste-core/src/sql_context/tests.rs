@@ -418,6 +418,44 @@ fn test_detect_dot_column_schema_qualified() {
 }
 
 #[test]
+fn test_detect_dot_column_keeps_last_char_of_an_open_quote() {
+    // `"p"."ti` is a quoted column name mid-typing: the closing quote does not
+    // exist yet, so stripping one byte off the end ate the `i` and completion
+    // filtered on "t" — showing `tag` next to `title`.
+    let sql = "SELECT * FROM posts \"p\" WHERE \"p\".\"ti";
+    let result = detect_context(sql, sql.len()).unwrap();
+    assert_eq!(
+        result.context_type,
+        ContextType::DotColumn {
+            table: "p".into(),
+            schema: None
+        }
+    );
+    assert_eq!(result.prefix, "ti");
+}
+
+#[test]
+fn test_detect_dot_column_reads_the_word_the_cursor_is_inside() {
+    // With the cursor right after `ti`, vim reports the offset of the `,` that
+    // follows it. The prefix already resolved to `ti`; the context has to be
+    // read from the same word, or a qualified column degrades to keywords.
+    let sql = "SELECT * FROM posts p WHERE p.ti, p.id";
+    let cursor = sql.find(", p.id").unwrap();
+    let result = detect_context(sql, cursor).unwrap();
+    assert_eq!(
+        result.context_type,
+        ContextType::DotColumn {
+            table: "p".into(),
+            schema: None
+        },
+        "got {:?} with prefix {:?}",
+        result.context_type,
+        result.prefix
+    );
+    assert_eq!(result.prefix, "ti");
+}
+
+#[test]
 fn test_detect_dot_column_schema_qualified_alias() {
     let result = detect_context("SELECT * FROM public.users u WHERE u.", 38).unwrap();
     assert_eq!(
