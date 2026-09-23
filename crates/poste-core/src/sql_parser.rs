@@ -49,17 +49,135 @@ fn extract_database(body: &str) -> Option<String> {
     None
 }
 
-/// Strip directive comment lines (`-- @connection`, `-- @database`, `-- @var = val`)
-/// from the body, returning only the SQL content.
-fn strip_directives(body: &str) -> String {
+/// Strip directive comment lines (`-- @connection`, `-- @database`,
+/// `-- @var = val`) from the body, returning only the SQL content.
+///
+/// Line-based by intent (a directive is a whole line) but literal-aware by
+/// necessity: SQL literals span lines, and a line INSIDE a multi-line literal
+/// that happens to start with `-- @word` is DATA — the old
+/// `lines().filter(is_directive)` deleted it and silently corrupted the
+/// stored value (`INSERT INTO notes VALUES ('line one\n-- @database sample\nline
+/// three')` lost its middle line before the server ever saw it). A line is a
+/// directive only when it starts outside every literal — the same shapes
+/// [`split_statements_with`] protects: single-quoted strings (`''` doubling),
+/// double-quoted / backtick identifiers, Postgres dollar-quoted bodies, and
+/// comments, where a quote is just text (`-- don't` must not open a fake
+/// literal that blinds the scan for the rest of the file).
+pub fn strip_directives(body: &str) -> String {
     static DIRECTIVE_RE: OnceLock<Regex> = OnceLock::new();
     let directive_re = DIRECTIVE_RE.get_or_init(|| {
         Regex::new(r"^\s*--\s*@\w+").expect("valid literal regex: directive comment")
     });
+    let top_level = top_level_line_starts(body);
     body.lines()
-        .filter(|line| !directive_re.is_match(line))
+        .zip(top_level)
+        .filter(|(line, top)| !top || !directive_re.is_match(line))
+        .map(|(line, _)| line)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// For each line of `body`, does the line start outside every literal?
+/// Mirrors the literal grammar of [`split_statements_with`]: `'`/`"`/`"`
+/// quotes with doubled-quote escapes, dollar-quoted bodies (`$$…$$`,
+/// `$tag$…$tag$`), `--` line comments (a quote in a comment is text) and
+/// `/* */` block comments.
+fn top_level_line_starts(body: &str) -> Vec<bool> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut flags = Vec::new();
+    let mut in_quote: Option<char> = None;
+    let mut dollar: Option<Vec<char>> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\n' {
+            // the next line starts at top level only if we are outside
+            // every literal right now
+            flags.push(in_quote.is_none() && dollar.is_none());
+            i += 1;
+            continue;
+        }
+        if let Some(q) = in_quote {
+            if c == q {
+                if chars.get(i + 1) == Some(&q) {
+                    i += 2; // doubled quote — still inside the literal
+                    continue;
+                }
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(tag) = &dollar {
+            if c == '$' && i + tag.len() <= chars.len() && chars[i..i + tag.len()] == tag[..] {
+                i += tag.len();
+                dollar = None;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        // top level
+        match c {
+            '\'' | '"' | '`' => in_quote = Some(c),
+            '-' if chars.get(i + 1) == Some(&'-') => {
+                // line comment: quotes inside are text; skip to (not past)
+                // the newline so the flag push above still sees it
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            '/' if chars.get(i + 1) == Some(&'*') => {
+                i += 2;
+                while i < chars.len() {
+                    if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            '$' => {
+                // `$tag$` / `$$` with the same tag grammar as
+                // split_statements_with; a non-tag `$` stays literal
+                let mut j = i + 1;
+                let mut tag = vec!['$'];
+                let mut is_tag = false;
+                if chars.get(j) == Some(&'$') {
+                    tag.push('$');
+                    j += 1;
+                    is_tag = true;
+                } else {
+                    while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                        if tag.len() == 1 && !(chars[j].is_ascii_alphabetic() || chars[j] == '_') {
+                            break;
+                        }
+                        tag.push(chars[j]);
+                        j += 1;
+                    }
+                    if tag.len() > 1 && chars.get(j) == Some(&'$') {
+                        tag.push('$');
+                        j += 1;
+                        is_tag = true;
+                    }
+                }
+                if is_tag {
+                    dollar = Some(tag);
+                    i = j;
+                    continue; // i already points past the opening tag
+                } else {
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // final line without a trailing newline
+    flags.push(in_quote.is_none() && dollar.is_none());
+    flags
 }
 
 /// Whether a backslash escapes the next character inside a quoted literal.
@@ -485,6 +603,77 @@ mod tests {
             "-- @connection postgres://localhost/test\n-- @database mydb\nSELECT 1; SELECT 2;";
         let stmts = split_statements(body);
         assert_eq!(stmts, vec!["SELECT 1", "SELECT 2"]);
+    }
+
+    #[test]
+    fn test_strip_directives_keeps_a_directive_lookalike_inside_a_string() {
+        // A line inside a multi-line string literal that starts with
+        // `-- @word` is DATA: the line-based filter deleted it and the
+        // stored value lost its middle line before the server saw it.
+        let body = "INSERT INTO notes VALUES ('line one\n-- @database sample\nline three');";
+        assert_eq!(
+            split_statements(body),
+            vec!["INSERT INTO notes VALUES ('line one\n-- @database sample\nline three')"]
+        );
+    }
+
+    #[test]
+    fn test_strip_directives_keeps_state_through_doubled_quotes() {
+        // The literal continues across the '' escape and the newline; the
+        // directive-lookalike after it is still inside the string.
+        let body = "INSERT INTO t VALUES ('it''s\n-- @connection fine\nhere');\nSELECT 1;";
+        assert_eq!(
+            split_statements(body),
+            vec![
+                "INSERT INTO t VALUES ('it''s\n-- @connection fine\nhere')",
+                "SELECT 1"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_strip_directives_keeps_dollar_quoted_body_lines() {
+        // A `-- @tag` line inside a function body is part of the body.
+        let body = "DO $$\nBEGIN\n-- @debug note\nRAISE NOTICE 'x';\nEND\n$$;\nSELECT 1;";
+        assert_eq!(
+            split_statements(body),
+            vec![
+                "DO $$\nBEGIN\n-- @debug note\nRAISE NOTICE 'x';\nEND\n$$",
+                "SELECT 1"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_strip_directives_survives_an_apostrophe_in_a_comment() {
+        // `-- don't` must not open a fake literal: a quote inside a line
+        // comment is text, and a fake open would blind the scan so a REAL
+        // directive further down survived the strip.
+        let body = "-- don't strip\n-- @database mydb\nSELECT 1;";
+        assert_eq!(split_statements(body), vec!["SELECT 1"]);
+        assert_eq!(
+            extract_database("-- don't strip\n-- @database mydb\nSELECT 1"),
+            Some("mydb".to_string())
+        );
+    }
+
+    #[test]
+    fn test_strip_directives_still_strips_top_level_lines() {
+        // every previously-strippable shape still strips (the quote-aware
+        // filter must not weaken the original contract)
+        assert_eq!(strip_directives("-- @var x = 1\nSELECT 1"), "SELECT 1");
+        assert_eq!(
+            strip_directives("  --@connection postgres://h/db\nSELECT 1"),
+            "SELECT 1"
+        );
+        assert_eq!(
+            strip_directives("-- not a directive\nSELECT 1"),
+            "-- not a directive\nSELECT 1"
+        );
+        assert_eq!(
+            strip_directives("-- email@example.com is not a directive\nSELECT 1"),
+            "-- email@example.com is not a directive\nSELECT 1"
+        );
     }
 
     #[test]
