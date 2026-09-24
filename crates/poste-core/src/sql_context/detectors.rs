@@ -438,3 +438,279 @@ pub(crate) fn show_type_keyword(w: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql_context::tokenizer::{tokenize, Token};
+
+    /// Token index under the `▮` marker (editor semantics: the cursor byte
+    /// belongs to the last token that starts at or before it). The marker is
+    /// removed before tokenizing.
+    fn marked(sql: &str) -> (Vec<Token>, usize, String) {
+        let clean = sql.replace('▮', "");
+        let byte = sql.find('▮').expect("sql must contain the ▮ cursor marker");
+        let tokens = tokenize(&clean);
+        let cursor = tokens
+            .iter()
+            .rposition(|t| t.start <= byte)
+            .expect("cursor byte inside the token range");
+        (tokens, cursor, clean)
+    }
+
+    // ---- show_type_keyword ----
+
+    #[test]
+    fn show_type_keyword_matches_any_case_exactly() {
+        assert_eq!(show_type_keyword("tables"), Some("tables"));
+        assert_eq!(show_type_keyword("TaBLeS"), Some("tables"));
+        assert_eq!(show_type_keyword("DATABASES"), Some("databases"));
+        assert_eq!(show_type_keyword("schemas"), Some("schemas"));
+        assert_eq!(show_type_keyword("columns"), Some("columns"));
+        assert_eq!(show_type_keyword("fields"), Some("fields"));
+    }
+
+    #[test]
+    fn show_type_keyword_rejects_near_misses_and_lengths() {
+        // "table" is shorter than 4..=9 bounds would allow but not a member;
+        // the bounds check (4..=9 bytes) gates the long words first.
+        assert_eq!(show_type_keyword("table"), None);
+        assert_eq!(show_type_keyword("tabless"), None);
+        assert_eq!(show_type_keyword(""), None);
+        assert_eq!(show_type_keyword("database"), None);
+        assert_eq!(show_type_keyword("information_schema"), None);
+    }
+
+    // ---- try_dot_column ----
+
+    #[test]
+    fn dot_after_a_table_suggests_its_columns() {
+        let (tokens, cursor, sql) = marked("SELECT * FROM users WHERE users▮.");
+        assert_eq!(
+            try_dot_column(&tokens, cursor, &sql),
+            Some(ContextType::DotColumn {
+                table: "users".into(),
+                schema: None,
+            })
+        );
+    }
+
+    #[test]
+    fn dot_in_a_from_clause_names_the_schema() {
+        // `FROM db.▮` is about to be a table inside schema `db`
+        let (tokens, cursor, sql) = marked("SELECT * FROM db.▮");
+        assert_eq!(
+            try_dot_column(&tokens, cursor, &sql),
+            Some(ContextType::SchemaTable {
+                schema: "db".into()
+            })
+        );
+    }
+
+    #[test]
+    fn dot_after_a_bare_word_outside_a_from_is_a_plain_column_prefix() {
+        let (tokens, cursor, sql) = marked("SELECT * FROM users WHERE db.▮");
+        assert_eq!(
+            try_dot_column(&tokens, cursor, &sql),
+            Some(ContextType::DotColumn {
+                table: "db".into(),
+                schema: None,
+            })
+        );
+    }
+
+    #[test]
+    fn schema_qualified_dot_carries_both_parts() {
+        let (tokens, cursor, sql) = marked("SELECT * FROM users WHERE db.users.▮");
+        assert_eq!(
+            try_dot_column(&tokens, cursor, &sql),
+            Some(ContextType::DotColumn {
+                table: "users".into(),
+                schema: Some("db".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn an_ident_not_adjacent_to_a_dot_is_not_a_dot_column() {
+        let (tokens, cursor, sql) = marked("SELECT * FROM publi▮c.users");
+        assert_eq!(try_dot_column(&tokens, cursor, &sql), None);
+    }
+
+    // ---- try_insert_column ----
+
+    #[test]
+    fn lparen_of_insert_into_suggests_columns() {
+        let (tokens, cursor, sql) = marked("INSERT INTO users (▮)");
+        assert_eq!(
+            try_insert_column(&tokens, cursor, &sql),
+            Some(ContextType::InsertColumn {
+                table: "users".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn anywhere_in_the_insert_column_list_still_suggests_columns() {
+        let (tokens, cursor, sql) = marked("INSERT INTO users (id, na▮me)");
+        assert!(matches!(
+            try_insert_column(&tokens, cursor, &sql),
+            Some(ContextType::InsertColumn { .. })
+        ));
+        let (tokens, cursor, sql) = marked("INSERT INTO users (id)▮");
+        assert!(matches!(
+            try_insert_column(&tokens, cursor, &sql),
+            Some(ContextType::InsertColumn { .. })
+        ));
+    }
+
+    #[test]
+    fn copy_uses_the_same_column_context() {
+        let (tokens, cursor, sql) = marked("COPY users (▮)");
+        assert!(matches!(
+            try_insert_column(&tokens, cursor, &sql),
+            Some(ContextType::InsertColumn { .. })
+        ));
+    }
+
+    #[test]
+    fn update_and_values_parens_are_not_insert_columns() {
+        let (tokens, cursor, sql) = marked("UPDATE users SET na▮me = 1");
+        assert_eq!(try_insert_column(&tokens, cursor, &sql), None);
+        let (tokens, cursor, sql) = marked("INSERT INTO users (id) VALUES (▮)");
+        assert_eq!(try_insert_column(&tokens, cursor, &sql), None);
+    }
+
+    // ---- try_directive ----
+
+    #[test]
+    fn use_at_the_start_of_the_text_suggests_a_database() {
+        let (tokens, cursor, sql) = marked("USE▮");
+        assert_eq!(
+            try_directive(&tokens, cursor, &sql),
+            Some(ContextType::Database)
+        );
+        let (tokens, cursor, sql) = marked("USE my▮db");
+        assert_eq!(
+            try_directive(&tokens, cursor, &sql),
+            Some(ContextType::Database)
+        );
+    }
+
+    #[test]
+    fn use_after_a_semicolon_suggests_a_database_but_the_next_statement_does_not() {
+        let (tokens, cursor, sql) = marked("SELECT 1; USE▮");
+        assert_eq!(
+            try_directive(&tokens, cursor, &sql),
+            Some(ContextType::Database)
+        );
+        let (tokens, cursor, sql) = marked("USE mydb; SEL▮ECT 1");
+        assert_eq!(try_directive(&tokens, cursor, &sql), None);
+    }
+
+    #[test]
+    fn use_fused_into_a_longer_word_is_not_a_use() {
+        // `USER u` — the token under the cursor is `u`; the scanner must not
+        // read `USER` as `USE`.
+        let (tokens, cursor, sql) = marked("USER u▮");
+        assert_eq!(try_directive(&tokens, cursor, &sql), None);
+    }
+
+    // ---- try_show_statement ----
+
+    #[test]
+    fn show_tables_and_friends_map_to_their_context() {
+        let (tokens, cursor, sql) = marked("SHOW TABLE▮S");
+        assert_eq!(
+            try_show_statement(&tokens, cursor, &sql),
+            Some(ContextType::Table)
+        );
+        let (tokens, cursor, sql) = marked("SHOW DA▮TABASES");
+        assert_eq!(
+            try_show_statement(&tokens, cursor, &sql),
+            Some(ContextType::Database)
+        );
+        let (tokens, cursor, sql) = marked("SHOW COLUMNS FR▮OM users");
+        assert_eq!(
+            try_show_statement(&tokens, cursor, &sql),
+            Some(ContextType::Table)
+        );
+    }
+
+    #[test]
+    fn show_with_a_non_type_word_and_a_plain_select_give_nothing() {
+        // "CREATE" is a keyword but not a show-type — no context
+        let (tokens, cursor, sql) = marked("SHOW CREATE TA▮BLE t");
+        assert_eq!(try_show_statement(&tokens, cursor, &sql), None);
+        let (tokens, cursor, sql) = marked("SELECT▮ 1");
+        assert_eq!(try_show_statement(&tokens, cursor, &sql), None);
+    }
+
+    // ---- try_grant_revoke ----
+
+    #[test]
+    fn the_table_position_of_grant_and_revoke() {
+        let (tokens, cursor, sql) = marked("GRANT SELECT, INSERT ON ta▮ble");
+        assert_eq!(
+            try_grant_revoke(&tokens, cursor, &sql),
+            Some(ContextType::Table)
+        );
+        let (tokens, cursor, sql) = marked("REVOKE ALL ON s▮chema.t");
+        assert_eq!(
+            try_grant_revoke(&tokens, cursor, &sql),
+            Some(ContextType::Table)
+        );
+    }
+
+    #[test]
+    fn grant_words_before_the_on_do_not_suggest_a_table() {
+        let (tokens, cursor, sql) = marked("GRANT SELEC▮T, INSERT ON table");
+        assert_eq!(try_grant_revoke(&tokens, cursor, &sql), None);
+        let (tokens, cursor, sql) = marked("SELECT * FROM t▮");
+        assert_eq!(try_grant_revoke(&tokens, cursor, &sql), None);
+    }
+
+    // ---- try_for_update_of ----
+
+    #[test]
+    fn the_table_list_after_for_update_of() {
+        let (tokens, cursor, sql) = marked("SELECT * FROM t FOR UPDATE OF ta▮ble");
+        assert_eq!(
+            try_for_update_of(&tokens, cursor, &sql),
+            Some(ContextType::Table)
+        );
+    }
+
+    #[test]
+    fn for_update_without_of_and_plain_ordering_are_not_table_contexts() {
+        let (tokens, cursor, sql) = marked("SELECT * FROM t FOR UPDA▮TE");
+        assert_eq!(try_for_update_of(&tokens, cursor, &sql), None);
+        // an identifier spelled "of" outside FOR UPDATE OF must not match
+        let (tokens, cursor, sql) = marked("SELECT * FROM t ORDER BY o▮f");
+        assert_eq!(try_for_update_of(&tokens, cursor, &sql), None);
+    }
+
+    // ---- try_bare_set ----
+
+    #[test]
+    fn a_session_set_suggests_keywords() {
+        let (tokens, cursor, sql) = marked("SET NAMES 'utf8'▮");
+        assert_eq!(
+            try_bare_set(&tokens, cursor, &sql),
+            Some(ContextType::Keyword)
+        );
+        let (tokens, cursor, sql) = marked("SET SESSION sort_buffer_size = 1000▮00");
+        assert_eq!(
+            try_bare_set(&tokens, cursor, &sql),
+            Some(ContextType::Keyword)
+        );
+    }
+
+    #[test]
+    fn the_set_of_update_belongs_to_the_update_not_the_session() {
+        let (tokens, cursor, sql) = marked("UPDATE users SET na▮me = 1");
+        assert_eq!(try_bare_set(&tokens, cursor, &sql), None);
+        let (tokens, cursor, sql) = marked("LOCK TABLES t READ▮");
+        assert_eq!(try_bare_set(&tokens, cursor, &sql), None);
+    }
+}
