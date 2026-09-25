@@ -10,9 +10,50 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 
+/// Redis-cli-style display form of one token: a token that is empty or
+/// carries whitespace, a quote, a backslash or any other control character is
+/// double-quoted with escapes. The echo travels back to the Lua panel as
+/// `result.command`, which RE-PARSES it (tab refresh, history replay, `gd`):
+/// a bare join leaked the decoded form of a binary-safe key — `GET a⏎b` —
+/// whose newline then split the key into `a` and `b` on re-parse (a silent
+/// wrong-target refresh) and crashed `nvim_buf_set_lines`, which rejects
+/// lines with embedded newlines. The quoted form round-trips through the
+/// Lua tokenizer's `unquote` (\\", \\, \\n, \\t, \\r, \\xHH).
+pub fn display_command(tokens: &[String]) -> String {
+    tokens
+        .iter()
+        .map(|t| display_token(t))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn display_token(t: &str) -> String {
+    let needs_quote = t.is_empty()
+        || t.chars()
+            .any(|c| c.is_whitespace() || c == '"' || c == '\\' || c.is_control());
+    if !needs_quote {
+        return t.to_string();
+    }
+    let mut out = String::with_capacity(t.len() + 2);
+    out.push('"');
+    for c in t.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Per-command outcomes for a batch.
 pub struct CommandOutcome {
-    /// Display form: tokens joined with single spaces.
+    /// Display form (`display_command`): redis-cli-style quoting, one line.
     pub command: String,
     /// 1-based position in the batch.
     pub seq: usize,
@@ -50,7 +91,7 @@ pub async fn execute_command_on(
     max_bytes: usize,
 ) -> CommandOutcome {
     let started = std::time::Instant::now();
-    let display = tokens.join(" ");
+    let display = display_command(tokens);
     if tokens.is_empty() {
         return CommandOutcome {
             command: display,
@@ -1112,5 +1153,83 @@ mod tests {
         assert!(outcomes[3].error.is_none());
         assert_eq!(outcomes[4].value["type"], "hash");
         assert!(outcomes[5].error.is_some()); // NOSUCHCMD recorded, batch continued
+    }
+
+    #[test]
+    fn display_command_keeps_clean_tokens_verbatim() {
+        let toks: Vec<String> = ["GET", "poste:key", "6379"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(display_command(&toks), "GET poste:key 6379");
+    }
+
+    #[test]
+    fn display_command_quotes_the_binary_safe_key() {
+        // The decoded form of `GET "a\nb"` reaches the binary as a real
+        // newline inside the token. The echo must stay ONE token the Lua
+        // panel can re-parse (unquote recovers the key) and must never carry
+        // a raw newline into a buffer line.
+        let toks = vec!["GET".to_string(), "a\nb".to_string()];
+        assert_eq!(display_command(&toks), "GET \"a\\nb\"");
+    }
+
+    #[test]
+    fn display_command_escapes_quotes_backslashes_and_controls() {
+        let toks = vec![
+            "SET".to_string(),
+            "say \"hi\"".to_string(),
+            "a\\b".to_string(),
+            "x\ty".to_string(),
+            "c\rd".to_string(),
+            "n\0p".to_string(),
+            "\x01".to_string(),
+            "".to_string(),
+        ];
+        assert_eq!(
+            display_command(&toks),
+            "SET \"say \\\"hi\\\"\" \"a\\\\b\" \"x\\ty\" \"c\\rd\" \"n\\x00p\" \"\\x01\" \"\""
+        );
+    }
+
+    #[test]
+    fn display_command_output_round_trips_through_the_lua_shapes() {
+        // The quoting mirrors util.render_command on the Lua side; whatever
+        // one escapes the other must decode back to the original tokens.
+        let toks = vec![
+            "DEL".to_string(),
+            "a b".to_string(),
+            "q\"k".to_string(),
+            "z\nk".to_string(),
+        ];
+        let display = display_command(&toks);
+        assert!(!display.contains('\n'));
+        // the same rule the Lua tokenizer applies: split on whitespace,
+        // then unquote each token (simplified here for the shapes we emit)
+        let mut parsed: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let mut chars = display.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                ' ' if !in_quotes => {
+                    parsed.push(std::mem::take(&mut current));
+                }
+                '"' => in_quotes = !in_quotes,
+                '\\' => {
+                    if let Some(e) = chars.next() {
+                        current.push(match e {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            other => other,
+                        });
+                    }
+                }
+                other => current.push(other),
+            }
+        }
+        parsed.push(current);
+        assert_eq!(parsed, toks);
     }
 }

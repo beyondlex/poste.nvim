@@ -41,7 +41,7 @@ fn error_outcome(
     msg: String,
 ) -> poste_exec::redis_executor::CommandOutcome {
     poste_exec::redis_executor::CommandOutcome {
-        command: tokens.join(" "),
+        command: poste_exec::redis_executor::display_command(tokens),
         seq,
         latency_ms: 0,
         value: json!({"type": "nil", "value": null}),
