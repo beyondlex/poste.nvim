@@ -606,6 +606,20 @@ mod tests {
     }
 
     #[test]
+    fn test_split_comment_text_contract() {
+        // Pinned asymmetry in the statement text the binary echoes back:
+        // a `--` comment's text is dropped (the newline survives as a
+        // separator, which is what keeps `SELECT 1--c\nFROM t` from gluing
+        // into `SELECT 1FROM t`), while a `/* */` comment survives
+        // verbatim. A `;` inside either still ends nothing.
+        assert_eq!(split_statements("SELECT 1 -- a;b\n;"), vec!["SELECT 1"]);
+        assert_eq!(
+            split_statements("SELECT /* a;b */ 1;"),
+            vec!["SELECT /* a;b */ 1"]
+        );
+    }
+
+    #[test]
     fn test_strip_directives_keeps_a_directive_lookalike_inside_a_string() {
         // A line inside a multi-line string literal that starts with
         // `-- @word` is DATA: the line-based filter deleted it and the
