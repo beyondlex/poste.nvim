@@ -130,10 +130,12 @@ and `-- @database <name>` lines follow rule 6 and are read and stripped here,
 not left to the editor). `--json` streams NDJSON progress/result events on
 stdout; per-statement objects carry `seq`, `sql`, `status`, `latency_ms`, and
 for SELECTs a `resultset` (`columns[].name`, `rows` as arrays, `row_count`,
-`total_rows`). MySQL `BINARY`/`BLOB` values are emitted as uppercase hex
-strings. The echoed `sql` is the statement text after splitting: a `--` line
-comment's text is dropped (its newline survives as a token separator), a
-`/* */` comment survives verbatim — pinned by
+`total_rows`). A zero-row SELECT still names its `columns` (recovered via a
+describe; a DML statement carries `columns: []`). A leading UTF-8 BOM is
+stripped before splitting. MySQL `BINARY`/`BLOB` values are emitted as
+uppercase hex strings. The echoed `sql` is the statement text after
+splitting: a `--` line comment's text is dropped (its newline survives as a
+token separator), a `/* */` comment survives verbatim — pinned by
 `test_split_comment_text_contract`.
 
 Exit code 0 even for per-statement SQL errors in `greedy` mode (errors are
