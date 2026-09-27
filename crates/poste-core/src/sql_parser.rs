@@ -68,6 +68,10 @@ pub fn strip_directives(body: &str) -> String {
     let directive_re = DIRECTIVE_RE.get_or_init(|| {
         Regex::new(r"^\s*--\s*@\w+").expect("valid literal regex: directive comment")
     });
+    // A BOM would also blind the directive regex: `\u{FEFF}-- @connection x`
+    // is not `^\s*--` (`\s` does not match U+FEFF), so the connection line
+    // was not recognized.
+    let body = strip_bom(body);
     let top_level = top_level_line_starts(body);
     body.lines()
         .zip(top_level)
@@ -75,6 +79,15 @@ pub fn strip_directives(body: &str) -> String {
         .map(|(line, _)| line)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Drop a leading UTF-8 BOM. Windows editors write one by default, and with
+/// `'bomb'` off Neovim keeps U+FEFF as the buffer's first character — it
+/// used to reach the statement splitter glued to the first keyword, where
+/// the query/DML classifier misread `\u{FEFF}SELECT 1` as DML and executed
+/// it through the no-rows path: "Query OK", resultset silently discarded.
+fn strip_bom(body: &str) -> &str {
+    body.strip_prefix('\u{feff}').unwrap_or(body)
 }
 
 /// For each line of `body`, does the line start outside every literal?
@@ -231,7 +244,7 @@ pub fn split_statements(body: &str) -> Vec<String> {
 /// - Empty statements are filtered out
 pub fn split_statements_with(body: &str, escapes: QuoteEscapes) -> Vec<String> {
     let backslash = escapes == QuoteEscapes::Backslash;
-    let cleaned = strip_directives(body);
+    let cleaned = strip_directives(strip_bom(body));
     let mut statements = Vec::new();
     let mut current = String::new();
     let mut chars = cleaned.chars().peekable();
@@ -589,6 +602,22 @@ mod tests {
     fn test_split_simple() {
         let stmts = split_statements("SELECT 1; SELECT 2;");
         assert_eq!(stmts, vec!["SELECT 1", "SELECT 2"]);
+    }
+
+    #[test]
+    fn test_split_strips_leading_bom() {
+        // A BOM glued to the first keyword used to blind the query/DML
+        // classifier and reach the server as part of the statement text.
+        let stmts = split_statements("\u{feff}SELECT 1;\nSELECT 2;");
+        assert_eq!(stmts, vec!["SELECT 1", "SELECT 2"]);
+    }
+
+    #[test]
+    fn test_directive_after_bom_is_recognized() {
+        // `\s` does not match U+FEFF, so a BOM before the connection
+        // directive line used to make the regex miss it.
+        let out = strip_directives("\u{feff}-- @connection pg://h/db\nSELECT 1;");
+        assert_eq!(out, "SELECT 1;");
     }
 
     #[test]

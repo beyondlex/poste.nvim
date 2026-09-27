@@ -364,6 +364,11 @@ fn parse_request(line: &str) -> Request {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
+        // A leading BOM rides in from buffers whose editor wrote one; it is
+        // invisible there but blinds the query/DML classifier and would
+        // reach the server glued to the first keyword.
+        .trim_start_matches('\u{feff}')
+        .trim()
         .to_string();
     if sql.is_empty() {
         return Request::Blank;
