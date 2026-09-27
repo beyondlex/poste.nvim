@@ -1173,6 +1173,56 @@ SELECT * FROM t ORDER BY x;
     }
 
     #[test]
+    fn test_sqlite_zero_row_select_keeps_columns() {
+        // Regression: column metadata was read off rows.first(), so a query
+        // that matched nothing arrived with `columns: []` — an empty
+        // resultset lost its shape. A describe recovers it.
+        let dir = tempfile::tempdir().unwrap();
+        let sql_path = dir.path().join("test.sql");
+
+        let sql_content = r#"-- @connection test_conn
+CREATE TABLE t (x INT, y TEXT);
+SELECT * FROM t WHERE x > 99;
+"#;
+        std::fs::write(&sql_path, sql_content).unwrap();
+
+        let conn_json = serde_json::json!({
+            "test_conn": {
+                "dialect": "sqlite",
+                "database": ":memory:"
+            }
+        });
+        std::fs::write(
+            dir.path().join("connections.json"),
+            serde_json::to_string_pretty(&conn_json).unwrap(),
+        )
+        .unwrap();
+
+        let args = ExecFileArgs {
+            file: sql_path.to_string_lossy().to_string(),
+            env: "dev".to_string(),
+            mode: "greedy".to_string(),
+            timeout: 10,
+            max_rows: 0,
+            json: true,
+            database: None,
+            connection: Some("test_conn".to_string()),
+        };
+
+        let events = collect_events(&args);
+        let result_events: Vec<&serde_json::Value> =
+            events.iter().filter(|e| e["type"] == "result").collect();
+        let select_result = result_events.last().unwrap();
+
+        assert_eq!(select_result["row_count"], 0);
+        assert_eq!(select_result["affected_rows"], serde_json::Value::Null);
+        let columns = select_result["columns"].as_array().unwrap();
+        assert_eq!(columns.len(), 2, "zero rows must not drop the columns");
+        assert_eq!(columns[0]["name"], "x");
+        assert_eq!(columns[1]["name"], "y");
+    }
+
+    #[test]
     fn test_sqlite_error_in_greedy_mode() {
         let dir = tempfile::tempdir().unwrap();
         let sql_path = dir.path().join("test.sql");

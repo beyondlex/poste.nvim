@@ -8,6 +8,7 @@
 //! handling and transaction semantics.
 
 use serde_json::{json, Value};
+use sqlx::Executor;
 use std::future::Future;
 
 // ---------------------------------------------------------------------------
@@ -205,7 +206,7 @@ where
 /// (absent), so both event builders take `Option<u64>`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_sqlx_statement<'e, DB, E, FV, FC>(
-    executor: E,
+    executor: &'e mut E,
     stmt: &str,
     kinds: &QueryKinds,
     timeout_secs: u64,
@@ -217,19 +218,37 @@ pub async fn run_sqlx_statement<'e, DB, E, FV, FC>(
 where
     DB: sqlx::Database,
     for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-    E: sqlx::Executor<'e, Database = DB>,
+    // The executor is reborrowed per use (fetch_all, then a describe on the
+    // zero-row path to recover the columns) — this is the sqlx-generic form
+    // that makes `&mut *executor` an Executor at each site.
+    for<'c> &'c mut E: sqlx::Executor<'c, Database = DB>,
     DB::QueryResult: RowsAffected,
     FV: Fn(&DB::Row, usize, &str) -> Value,
     FC: Fn(&DB::Column) -> Value,
 {
     if is_query_with(kinds, stmt) {
-        let rows: Vec<DB::Row> = timed(timeout_secs, async move {
-            let rows = sqlx::query(stmt).fetch_all(executor).await?;
+        let rows: Vec<DB::Row> = timed(timeout_secs, async {
+            let rows = sqlx::query(stmt).fetch_all(&mut *executor).await?;
             Ok(rows)
         })
         .await?;
         let row_count = rows.len() as u64;
-        let block = sqlx_rows_to_block(&rows, value_fn, col_fn);
+        let mut block = sqlx_rows_to_block(&rows, value_fn, &col_fn);
+        // Column metadata used to be read off rows.first(), so a query that
+        // matched nothing arrived with `columns: []` — an empty resultset
+        // lost its shape (psql and every driver UI still name the columns).
+        // A describe recovers it: the extra round-trip fires only on the
+        // zero-row path, and a describe failure keeps the old shape instead
+        // of failing a statement that already succeeded.
+        if row_count == 0 {
+            if let Ok(info) = timed(timeout_secs, async {
+                Ok((&mut *executor).describe(stmt).await?)
+            })
+            .await
+            {
+                block.columns = info.columns.iter().map(col_fn).collect();
+            }
+        }
         let (display, truncated) = clamp_rows(block.rows, max_rows);
         Ok(StmtOutcome {
             columns: block.columns,
@@ -241,8 +260,8 @@ where
             affected: 0,
         })
     } else {
-        let result = timed(timeout_secs, async move {
-            let r = sqlx::query(stmt).execute(executor).await?;
+        let result = timed(timeout_secs, async {
+            let r = sqlx::query(stmt).execute(&mut *executor).await?;
             Ok(r)
         })
         .await?;
