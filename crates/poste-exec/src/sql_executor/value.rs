@@ -18,10 +18,6 @@ pub(super) fn float_json<T: Into<f64> + Copy>(v: T) -> Value {
     crate::sql_values::float_json(v)
 }
 
-pub(super) fn opt_float_json<T: Into<f64> + Copy>(v: Option<T>) -> Value {
-    v.map(float_json).unwrap_or(Value::Null)
-}
-
 /// Serialize an i64 as a JSON number when it fits exactly in a double
 /// (|v| < 2^53), otherwise as a JSON string to preserve every digit.
 /// Without this, e.g. bigint 2084515900853196878 decodes as
@@ -32,6 +28,10 @@ pub(super) fn int_json(v: i64) -> Value {
     } else {
         json!(v.to_string())
     }
+}
+
+pub(super) fn opt_float_json<T: Into<f64> + Copy>(v: Option<T>) -> Value {
+    v.map(float_json).unwrap_or(Value::Null)
 }
 
 pub(super) fn opt_int_json(v: Option<i64>) -> Value {
@@ -58,18 +58,6 @@ pub(super) fn string_fallback(s: Option<String>, b: Option<Vec<u8>>) -> Value {
     }
 }
 
-/// Render raw bytes (BINARY/BLOB columns) as uppercase hex, matching
-/// MySQL's HEX() output for binary passes.
-pub(super) fn binary_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0F) as usize] as char);
-    }
-    out
-}
-
 pub(super) fn date_fallback(
     try_date: Option<sqlx::types::chrono::NaiveDate>,
     s: Option<String>,
@@ -89,21 +77,6 @@ pub(super) fn datetime_fallback(
 ) -> Value {
     if let Some(v) = v {
         json!(v.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
-    } else {
-        string_fallback(s, b)
-    }
-}
-
-pub(super) fn timestamptz_fallback(
-    v: Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>,
-    s: Option<String>,
-    b: Option<Vec<u8>>,
-) -> Value {
-    if let Some(v) = v {
-        json!(v
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%dT%H:%M:%S%.3f%:z")
-            .to_string())
     } else {
         string_fallback(s, b)
     }

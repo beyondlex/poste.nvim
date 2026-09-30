@@ -13,11 +13,6 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use super::StatementResult;
-use crate::response::Response;
-use poste_core::sql_parser;
-use poste_core::Protocol;
-
 pub struct ClickHouseClient {
     http: reqwest::Client,
     base_url: String,
@@ -255,72 +250,6 @@ pub fn is_query_stmt(stmt: &str) -> bool {
         || upper.starts_with("EXISTS")
         || upper.starts_with("EXPLAIN")
         || upper.starts_with("VALUES")
-}
-
-pub(super) async fn execute_clickhouse(
-    parsed: &sql_parser::SqlParseResult,
-    timeout_secs: u64,
-) -> Result<Response> {
-    // One session_id per run keeps temp tables alive across statements
-    // (HTTP is otherwise stateless), matching the TCP drivers' behavior.
-    let client = with_session_id(
-        connect_clickhouse(&parsed.connection).await?,
-        sqlx::types::Uuid::new_v4().to_string(),
-    );
-
-    let mut results = Vec::new();
-    let total_start = std::time::Instant::now();
-
-    for stmt in &parsed.statements {
-        if sql_parser::detect_use_statement(stmt).is_some() {
-            continue;
-        }
-
-        let stmt_result: anyhow::Result<StatementResult> = async {
-            let stmt_start = std::time::Instant::now();
-            let ch = clickhouse_post(&client, stmt.trim(), timeout_secs).await?;
-            let elapsed = stmt_start.elapsed().as_millis() as u64;
-            match ch.columns {
-                Some(columns) => {
-                    let row_count = ch.rows.len();
-                    Ok(StatementResult {
-                        columns,
-                        rows: ch.rows,
-                        row_count,
-                        affected_rows: None,
-                        execution_time_ms: elapsed,
-                        error: None,
-                        connection: None,
-                        translated_sql: None,
-                        original_sql: None,
-                    })
-                }
-                None => Ok(StatementResult {
-                    affected_rows: Some(ch.written_rows),
-                    execution_time_ms: elapsed,
-                    ..Default::default()
-                }),
-            }
-        }
-        .await;
-
-        match stmt_result {
-            Ok(sr) => results.push(sr),
-            Err(e) => results.push(StatementResult {
-                error: Some(format!("{}", e)),
-                ..Default::default()
-            }),
-        }
-    }
-
-    let total_ms = total_start.elapsed().as_millis() as u64;
-    super::build_response(
-        &Protocol::ClickHouse,
-        &parsed.connection,
-        &parsed.database,
-        results,
-        total_ms,
-    )
 }
 
 #[cfg(test)]

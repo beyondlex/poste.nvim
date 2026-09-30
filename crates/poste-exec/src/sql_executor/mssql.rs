@@ -11,10 +11,7 @@ use serde_json::{json, Value};
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use super::value;
-use super::StatementResult;
-use crate::response::Response;
 use poste_core::sql_parser;
-use poste_core::Protocol;
 
 pub type MssqlClient = tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>;
 
@@ -306,68 +303,6 @@ pub fn mssql_value_to_json(row: &tiberius::Row, idx: usize) -> Value {
                 .map(|b| b.to_vec()),
         ),
     }
-}
-
-pub(super) async fn execute_mssql(
-    parsed: &sql_parser::SqlParseResult,
-    timeout_secs: u64,
-) -> Result<Response> {
-    let mut client = connect_mssql(&parsed.connection).await?;
-
-    let mut results = Vec::new();
-    let total_start = std::time::Instant::now();
-
-    for stmt in &parsed.statements {
-        if sql_parser::detect_use_statement(stmt).is_some() {
-            continue;
-        }
-
-        let stmt_result: anyhow::Result<StatementResult> = async {
-            let stmt_start = std::time::Instant::now();
-            let trimmed = stmt.trim();
-            if is_query_stmt(trimmed) {
-                let (columns, json_rows) = mssql_query(&mut client, trimmed, timeout_secs).await?;
-                let elapsed = stmt_start.elapsed().as_millis() as u64;
-                Ok(StatementResult {
-                    row_count: json_rows.len(),
-                    columns,
-                    rows: json_rows,
-                    affected_rows: None,
-                    execution_time_ms: elapsed,
-                    error: None,
-                    connection: None,
-                    translated_sql: None,
-                    original_sql: None,
-                })
-            } else {
-                let affected = mssql_execute(&mut client, trimmed, timeout_secs).await?;
-                let elapsed = stmt_start.elapsed().as_millis() as u64;
-                Ok(StatementResult {
-                    affected_rows: Some(affected),
-                    execution_time_ms: elapsed,
-                    ..Default::default()
-                })
-            }
-        }
-        .await;
-
-        match stmt_result {
-            Ok(sr) => results.push(sr),
-            Err(e) => results.push(StatementResult {
-                error: Some(format!("{}", e)),
-                ..Default::default()
-            }),
-        }
-    }
-
-    let total_ms = total_start.elapsed().as_millis() as u64;
-    super::build_response(
-        &Protocol::Mssql,
-        &parsed.connection,
-        &parsed.database,
-        results,
-        total_ms,
-    )
 }
 
 #[cfg(test)]
