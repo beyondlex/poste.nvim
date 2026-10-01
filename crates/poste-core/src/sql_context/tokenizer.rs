@@ -403,8 +403,9 @@ fn c_escapes_prefix(bytes: &[u8], start: usize) -> bool {
 /// `tag` matching `[A-Za-z_][A-Za-z0-9_]*`), return the index just past the
 /// matching closing delimiter; a body with no closing delimiter runs to the end
 /// of the input, which is how `sql_parser::split_statements` reads it too.
-/// `None` means this `$` opens nothing — a `$1`-style placeholder, or a tag
-/// whose closing `$` is missing — and is tokenized as an ordinary character.
+/// `None` means this `$` opens nothing — a `$1`-style placeholder, or a word
+/// that never reaches a closing `$` (so the tag grammar itself fails) — and is
+/// tokenized as an ordinary character.
 ///
 /// The tag grammar is deliberately the splitter's and not wider: the two
 /// scanners answer questions about the same text (what is one statement, where
@@ -430,7 +431,15 @@ fn scan_dollar_quote(bytes: &[u8], start: usize) -> Option<usize> {
     let delim = &bytes[start..j];
     let mut k = j;
     while k < n {
-        let found = bytes[k..].iter().position(|&b| b == b'$')?;
+        // No further `$` anywhere: the body is unterminated and runs to the
+        // end of the input, exactly like `sql_parser::split_statements` reads
+        // it (and like the server, which reports "unterminated dollar-quoted
+        // string" over the whole rest). Returning None here re-opened live-SQL
+        // tokenization mid-body, so a `;` inside it split the editor's
+        // statement map while exec-file ran the whole body as one statement.
+        let Some(found) = bytes[k..].iter().position(|&b| b == b'$') else {
+            return Some(n);
+        };
         k += found;
         if bytes.len() - k >= delim.len() && &bytes[k..k + delim.len()] == delim {
             return Some(k + delim.len());
@@ -920,6 +929,54 @@ mod tests {
         assert!(
             !kinds("SELECT $a FROM t").contains(&TokenKind::DollarStr),
             "an unterminated tag is not an opener"
+        );
+    }
+
+    /// A valid tag opener whose body never closes runs to the end of the
+    /// input — what `sql_parser::split_statements` does (and the server,
+    /// which answers "unterminated dollar-quoted string" for the whole rest).
+    /// The tokenizer used to fall back to "ordinary character" whenever no
+    /// further `$` existed in the remainder, so a `;` inside a body the user
+    /// is still typing split the editor's statement map (`context stmt`,
+    /// statement indicator, diagnostics ranges) while exec-file ran the same
+    /// buffer as ONE statement: run-statement-under-cursor and run-file
+    /// disagreed about what executes.
+    #[test]
+    fn unterminated_dollar_body_runs_to_end_of_input() {
+        // No `$` anywhere after the opener.
+        let src = "SELECT $fn$ BEGIN SELECT 1; END;\nSELECT 2";
+        assert_eq!(
+            quoted_spans(src),
+            vec![(
+                TokenKind::DollarStr,
+                "$fn$ BEGIN SELECT 1; END;\nSELECT 2".to_string()
+            )],
+            "the body swallows the `;` and the next statement — one unterminated literal"
+        );
+        assert!(
+            !kinds(src).contains(&TokenKind::Semi),
+            "no live semicolon may survive inside the body"
+        );
+        // A stray `$` that never completes the tag is inside the body too —
+        // the old code returned None here as well.
+        let src = "SELECT $fn$ a; $$ b";
+        assert_eq!(
+            quoted_spans(src),
+            vec![(TokenKind::DollarStr, "$fn$ a; $$ b".to_string())]
+        );
+        // `$$` and tagged forms behave the same.
+        let src = "DO $$ BEGIN RAISE NOTICE 'x'; END";
+        assert_eq!(
+            quoted_spans(src),
+            vec![(
+                TokenKind::DollarStr,
+                "$$ BEGIN RAISE NOTICE 'x'; END".to_string()
+            )]
+        );
+        // And the closed cases still scan as before.
+        assert_eq!(
+            quoted_spans("SELECT $fn$ a; $fn$ SELECT 2"),
+            vec![(TokenKind::DollarStr, "$fn$ a; $fn$".to_string())]
         );
     }
 
