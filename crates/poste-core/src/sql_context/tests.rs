@@ -1,4 +1,5 @@
 use super::*;
+use crate::sql_parser::QuoteEscapes;
 
 // ---- Tokenizer ----
 
@@ -1817,6 +1818,28 @@ fn test_find_statement_span_multi_statement_on_same_line() {
     let lines = vec!["SELECT 1; SELECT 2;"];
     let span = find_statement_span(&lines, 0);
     assert_eq!(span, Some((0, 0)));
+}
+
+/// The dialect's quote-escape reading moves the statement boundary exactly
+/// where `split_statements_with` (exec-file) puts it: a MySQL `\'` keeps the
+/// literal open, so the statement after it is a separate one — the standard
+/// reading instead closes the literal early, re-opens on the next quote and
+/// swallows the rest as a phantom string. run-statement-under-cursor and
+/// run-file must agree on where statement 2 begins.
+#[test]
+fn test_find_statement_span_with_mysql_escapes() {
+    let lines = vec!["SELECT 'it\\'s', 'x';", "DELETE FROM t;"];
+    // Standard reading (the default — the pre-dialect behavior): the first
+    // literal closes at the escaped quote, `s'` re-opens a phantom string that
+    // swallows the `;` and the DELETE; the whole text is "one statement".
+    assert_eq!(find_statement_span(&lines, 1), Some((0, 1)));
+    // MySQL reading: the escaped quote stays inside the literal, the `;`
+    // closes statement 1, and line 1 is its own statement.
+    let span = find_statement_span_with(&lines, 1, QuoteEscapes::Backslash);
+    assert_eq!(span, Some((1, 1)));
+    // Same contract for the whole-file range map.
+    let ranges = find_all_statement_ranges_with(&lines, QuoteEscapes::Backslash);
+    assert_eq!(ranges, vec![(0, 0), (1, 1)]);
 }
 
 #[test]

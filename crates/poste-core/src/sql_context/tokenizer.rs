@@ -81,6 +81,9 @@ impl Token {
 // ---------------------------------------------------------------------------
 
 /// Tokenize SQL text with the standard (`''`-only) quote reading.
+/// Test-only convenience: every lib caller names the dialect's reading through
+/// [`tokenize_with`] so the two scanners cannot drift apart again.
+#[cfg(test)]
 pub(crate) fn tokenize(sql: &str) -> Vec<Token> {
     tokenize_with(sql, QuoteEscapes::Standard)
 }
@@ -348,7 +351,7 @@ pub(crate) fn tokenize_with(sql: &str, escapes: QuoteEscapes) -> Vec<Token> {
 /// the two scanners cannot disagree about where a literal ends — and `Generic`
 /// keeps the standard reading, because a bare `\` is only an escape in MySQL,
 /// and a caller that knows it is on MySQL says so through `--dialect`.
-pub(crate) fn escapes_for(dialect: SqlDialect) -> QuoteEscapes {
+pub fn escapes_for(dialect: SqlDialect) -> QuoteEscapes {
     match dialect {
         SqlDialect::MySql => QuoteEscapes::Backslash,
         _ => QuoteEscapes::Standard,

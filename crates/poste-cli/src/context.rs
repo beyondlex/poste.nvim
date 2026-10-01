@@ -19,9 +19,20 @@ pub enum ContextAction {
     Stmt {
         /// Cursor line number (0-based)
         cursor_line: usize,
+        /// Dialect whose quote-escape reading splits literals (generic,
+        /// postgres, mysql, sqlite). exec-file splits the same buffer with
+        /// this reading, so the statement span "run under cursor" executes
+        /// must agree with what run-file splits — a MySQL `'it\'s'` moves
+        /// both boundaries.
+        #[arg(long, default_value = "generic")]
+        dialect: String,
     },
     /// Find ALL statement boundary line ranges in the given text
-    StmtRanges,
+    StmtRanges {
+        /// Dialect for the quote-escape reading (see `stmt`)
+        #[arg(long, default_value = "generic")]
+        dialect: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -85,12 +96,7 @@ pub fn execute(action: ContextAction) -> Result<()> {
         ContextAction::Detect { offset, dialect } => {
             let mut sql = String::new();
             std::io::stdin().read_to_string(&mut sql)?;
-            let dialect = match dialect.as_str() {
-                "postgres" => SqlDialect::Postgres,
-                "mysql" => SqlDialect::MySql,
-                "sqlite" => SqlDialect::Sqlite,
-                _ => SqlDialect::Generic,
-            };
+            let dialect = parse_dialect(&dialect);
             let result = sql_context::detect_context_with_dialect(&sql, offset, dialect);
             let response = match result {
                 Some(ctx) => make_detect_response(&ctx),
@@ -108,11 +114,15 @@ pub fn execute(action: ContextAction) -> Result<()> {
             };
             println!("{}", serde_json::to_string(&response)?);
         }
-        ContextAction::Stmt { cursor_line } => {
+        ContextAction::Stmt {
+            cursor_line,
+            dialect,
+        } => {
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input)?;
             let lines: Vec<&str> = input.lines().collect();
-            let span = sql_context::find_statement_span(&lines, cursor_line);
+            let escapes = sql_context::escapes_for(parse_dialect(&dialect));
+            let span = sql_context::find_statement_span_with(&lines, cursor_line, escapes);
             let response = match span {
                 Some((start, end)) => ContextStmtResponse {
                     start_line: start,
@@ -125,14 +135,25 @@ pub fn execute(action: ContextAction) -> Result<()> {
             };
             println!("{}", serde_json::to_string(&response)?);
         }
-        ContextAction::StmtRanges => {
+        ContextAction::StmtRanges { dialect } => {
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input)?;
             let lines: Vec<&str> = input.lines().collect();
-            let ranges = sql_context::find_all_statement_ranges(&lines);
+            let escapes = sql_context::escapes_for(parse_dialect(&dialect));
+            let ranges = sql_context::find_all_statement_ranges_with(&lines, escapes);
             println!("{}", serde_json::to_string(&ranges)?);
         }
     }
 
     Ok(())
+}
+
+/// The dialect named on the command line, mirroring `detect`'s mapping.
+fn parse_dialect(name: &str) -> SqlDialect {
+    match name {
+        "postgres" => SqlDialect::Postgres,
+        "mysql" => SqlDialect::MySql,
+        "sqlite" => SqlDialect::Sqlite,
+        _ => SqlDialect::Generic,
+    }
 }

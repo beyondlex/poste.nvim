@@ -1,4 +1,5 @@
-use super::tokenizer::{is_set_operator, tokenize, Token, TokenKind};
+use super::tokenizer::{is_set_operator, tokenize_with, Token, TokenKind};
+use crate::sql_parser::QuoteEscapes;
 
 /// SQL keywords that start a new top-level statement.
 ///
@@ -247,12 +248,26 @@ pub(crate) fn find_statement_token_range(
 /// Find the **line range** `(start_line, end_line)` for the statement containing
 /// `cursor_line`.
 pub fn find_statement_span(lines: &[&str], cursor_line: usize) -> Option<(usize, usize)> {
+    find_statement_span_with(lines, cursor_line, QuoteEscapes::Standard)
+}
+
+/// [`find_statement_span`] reading string literals the way `escapes` says the
+/// dialect does. The statement span decides what "run statement under cursor"
+/// executes, and `exec-file` splits the same buffer with the dialect's own
+/// reading (`QuoteEscapes::for_protocol`) — the two scanners must agree, or a
+/// MySQL `'it\'s'` puts the cursor's statement boundary somewhere exec-file
+/// does not split.
+pub fn find_statement_span_with(
+    lines: &[&str],
+    cursor_line: usize,
+    escapes: QuoteEscapes,
+) -> Option<(usize, usize)> {
     if lines.is_empty() || cursor_line >= lines.len() {
         return None;
     }
 
     let text = lines.join("\n");
-    let tokens = tokenize(&text);
+    let tokens = tokenize_with(&text, escapes);
     if tokens.is_empty() {
         return None;
     }
@@ -323,6 +338,15 @@ fn push_stmt_range(result: &mut Vec<(usize, usize)>, tokens: &[Token], s: usize,
 
 /// Find ALL statement line ranges in the given lines.
 pub fn find_all_statement_ranges(lines: &[&str]) -> Vec<(usize, usize)> {
+    find_all_statement_ranges_with(lines, QuoteEscapes::Standard)
+}
+
+/// [`find_all_statement_ranges`] with the dialect's quote-escape reading — the
+/// same scanner-agreement contract as [`find_statement_span_with`].
+pub fn find_all_statement_ranges_with(
+    lines: &[&str],
+    escapes: QuoteEscapes,
+) -> Vec<(usize, usize)> {
     if lines.is_empty() {
         return vec![];
     }
@@ -331,7 +355,7 @@ pub fn find_all_statement_ranges(lines: &[&str]) -> Vec<(usize, usize)> {
     }
 
     let text = lines.join("\n");
-    let tokens = tokenize(&text);
+    let tokens = tokenize_with(&text, escapes);
     if tokens.is_empty() {
         return vec![(0, lines.len() - 1)];
     }
