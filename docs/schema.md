@@ -225,14 +225,29 @@ table/column/index queries are schema-scoped (PG search path honored).
 
 ```
 poste context detect <offset> [--dialect generic|postgres|mysql|sqlite]
-poste context stmt   <offset> # statement boundaries around a cursor line
-poste context stmt-ranges     # ALL statement boundary line ranges in the text
+poste context stmt   <offset> [--dialect generic|postgres|mysql|sqlite]
+poste context stmt-ranges     [--dialect generic|postgres|mysql|sqlite]
 ```
 
 Pure text analysis: reads SQL text on stdin, answers completion-context /
 statement-boundary questions for the given 0-based byte `offset`. `stmt`
 returns `{start_line, end_line}` (0-based); `stmt-ranges` returns
 `[[start, end], ...]` pairs covering every statement in the text.
+`--dialect` names the quote-escape reading for string literals
+(`mysql` reads `\'` as an escaped quote, everything else keeps
+`standard_conforming_strings`); `exec-file` splits the same buffer with
+the same reading, so a caller that knows the connection's dialect
+passes it and run-statement-under-cursor stays identical to run-file.
+The default (`generic`) is the standard reading.
+
+What the answers mean, since three scanners (the splitter, the classifier and
+this tokenizer) read the same text and must not disagree:
+
+- A valid dollar-quote tag whose body never closes runs to the end of the
+  input — in the splitter, in this tokenizer and on the server (which
+  answers "unterminated dollar-quoted string" for the whole rest). A `$`
+  that fails the tag grammar (`$1`, a word with no closing `$`) is an
+  ordinary character everywhere.
 
 What the answers mean, since three scanners (the splitter, the classifier and
 this tokenizer) read the same text and must not disagree:
