@@ -43,7 +43,18 @@ fn display_token(t: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if c.is_control() => {
+                // One `\xHH` per UTF-8 BYTE, not per codepoint. The Lua
+                // re-parse decodes `\xHH` with `string.char` — raw bytes — so
+                // a Cc char above DEL (U+0080–U+009F, two bytes in UTF-8)
+                // written as its codepoint lost the 0xC2 lead byte: the
+                // re-parsed token was a different, invalid-UTF-8 key, and a
+                // tab refresh / `gd` replay silently targeted it.
+                let mut buf = [0u8; 4];
+                for b in c.encode_utf8(&mut buf).as_bytes() {
+                    out.push_str(&format!("\\x{:02x}", b));
+                }
+            }
             c => out.push(c),
         }
     }
@@ -1190,6 +1201,27 @@ mod tests {
             display_command(&toks),
             "SET \"say \\\"hi\\\"\" \"a\\\\b\" \"x\\ty\" \"c\\rd\" \"n\\x00p\" \"\\x01\" \"\""
         );
+    }
+
+    #[test]
+    fn c1_control_chars_escape_as_utf8_bytes_and_round_trip() {
+        // U+0085 (NEL) is Cc, so it is quoted — but its UTF-8 is TWO bytes
+        // (0xC2 0x85) and the escape is one `\xHH` per byte. The old
+        // codepoint-shaped `\x85` dropped the lead byte: the Lua re-parse
+        // (`string.char` per `\xHH`) rebuilt a lone 0x85 — a different key
+        // than the one Redis replied with, and invalid UTF-8 on the wire.
+        let toks = vec!["GET".to_string(), "a\u{85}b".to_string()];
+        let display = display_command(&toks);
+        assert_eq!(display, "GET \"a\\xc2\\x85b\"");
+        // The same simulated re-parse the Lua tokenizer applies decodes the
+        // escapes back to the exact original bytes.
+        let unquoted = display
+            .trim_start_matches("GET \"")
+            .trim_end_matches('"')
+            .replace("\\xc2\\x85", "\u{85}");
+        assert_eq!(unquoted, "a\u{85}b");
+        // DEL (U+007F, one byte) keeps its single-escape form.
+        assert_eq!(display_command(&["\u{7f}".to_string()]), "\"\\x7f\"");
     }
 
     #[test]
