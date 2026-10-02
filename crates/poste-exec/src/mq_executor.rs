@@ -211,26 +211,58 @@ pub fn delivery_properties_to_json(delivery: &Delivery) -> Value {
 
 // ── Per-operation execution ─────────────────────────────────────────────
 
-async fn op_publish(channel: &Channel, op: &Value) -> Result<Value> {
-    let (exchange, routing_key) = match op.get("queue").and_then(|q| q.as_str()) {
+/// JSON value's type, named the way serde_json spells it in its own docs —
+/// the word an op-shape error needs when the Lua layer sent the wrong shape.
+fn json_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Resolve a publish op's exchange / routing_key / payload without a
+/// connection. A present-but-not-a-string field used to fall through to ""
+/// — publishing the empty payload to the default exchange's empty route
+/// with routed:true is a silent wrong-target write. Absent stays legal: a
+/// queue-targeted publish legitimately names no `exchange`, a fanout needs
+/// no `routing_key`; null counts as absent. `queue` wins over `exchange`
+/// when both name strings (the default-exchange publish form).
+pub fn publish_parts(op: &Value) -> Result<(String, String, Vec<u8>)> {
+    fn string_field<'a>(op: &'a Value, key: &str) -> Result<Option<&'a str>> {
+        match op.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(s)) => Ok(Some(s.as_str())),
+            Some(other) => Err(anyhow::anyhow!(
+                "publish {} must be a string (got {})",
+                key,
+                json_type_name(other)
+            )),
+        }
+    }
+    let (exchange, routing_key) = match string_field(op, "queue")? {
         Some(queue) => (String::new(), queue.to_string()), // default exchange
         None => (
-            op.get("exchange")
-                .and_then(|e| e.as_str())
+            string_field(op, "exchange")?
                 .unwrap_or_default()
                 .to_string(),
-            op.get("routing_key")
-                .and_then(|r| r.as_str())
+            string_field(op, "routing_key")?
                 .unwrap_or_default()
                 .to_string(),
         ),
     };
-    let payload = op
-        .get("payload")
-        .and_then(|p| p.as_str())
+    let payload = string_field(op, "payload")?
         .unwrap_or_default()
         .as_bytes()
         .to_vec();
+    Ok((exchange, routing_key, payload))
+}
+
+async fn op_publish(channel: &Channel, op: &Value) -> Result<Value> {
+    let (exchange, routing_key, payload) = publish_parts(op)?;
     let props = json_to_properties(op.get("properties").unwrap_or(&Value::Null));
     let options = BasicPublishOptions {
         mandatory: op
@@ -551,7 +583,12 @@ where
         let outcome = execute_operation_on(&channel, op, i + 1).await;
         on_outcome(outcome);
     }
-    connection.close(0, "").await?;
+    // Teardown must not fail the batch: every outcome is already delivered
+    // by the time the close frame is written, and a teardown hiccup used to
+    // turn a fully-successful run into exit 1 with the summary event
+    // swallowed (the redis executor simply drops its connection; this close
+    // is politeness, not a result).
+    let _ = connection.close(0, "").await;
     Ok(())
 }
 
@@ -611,5 +648,49 @@ mod tests {
     fn empty_arguments_render_as_empty_table() {
         let args = field_arguments(&json!({"op": "declare"}));
         assert!(args.inner().is_empty());
+    }
+
+    #[test]
+    fn publish_parts_reads_the_default_exchange_form() {
+        let (exchange, routing_key, payload) =
+            publish_parts(&json!({"op": "publish", "queue": "jobs", "payload": "hi"})).unwrap();
+        assert_eq!(exchange, "");
+        assert_eq!(routing_key, "jobs");
+        assert_eq!(payload, b"hi");
+    }
+
+    #[test]
+    fn publish_parts_absent_fields_stay_legal_and_empty() {
+        // a fanout publish names only the exchange; an empty body is a
+        // legitimate payload
+        let (exchange, routing_key, payload) =
+            publish_parts(&json!({"op": "publish", "exchange": "logs"})).unwrap();
+        assert_eq!(exchange, "logs");
+        assert_eq!(routing_key, "");
+        assert!(payload.is_empty());
+        // null counts as absent, not as a type error
+        let (_, rk, p) = publish_parts(&json!({
+            "op": "publish", "exchange": "logs",
+            "routing_key": null, "payload": null,
+        }))
+        .unwrap();
+        assert_eq!(rk, "");
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn publish_parts_rejects_a_present_non_string_field() {
+        // each of these used to fall through to "" — an empty payload to the
+        // empty route with routed:true, a silent wrong-target write
+        for op in [
+            json!({"op": "publish", "queue": "jobs", "payload": 123}),
+            json!({"op": "publish", "queue": "jobs", "payload": {"a": 1}}),
+            json!({"op": "publish", "exchange": "ex", "routing_key": 5}),
+            json!({"op": "publish", "queue": ["jobs"]}),
+        ] {
+            let err = publish_parts(&op).unwrap_err().to_string();
+            assert!(err.contains("must be a string"), "{op} → {err}");
+            assert!(err.contains("got "), "{op} → {err}");
+        }
     }
 }
