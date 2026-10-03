@@ -284,24 +284,49 @@ fn key_display(val: &redis::Value) -> String {
 /// no `value` key at all — a nested `hash` has `entries`, and flattening it to
 /// JSON null hid a value that is very much there.
 fn child_cell(val: &redis::Value, max_items: usize, max_bytes: usize) -> Value {
+    child_cell_capped(val, max_items, max_bytes).0
+}
+
+/// [`child_cell`] plus whether the child's TEXT was cut by `max_bytes`. List
+/// elements and hash values past the cap arrive as their first N bytes with no
+/// marker a Lua-side write could see — an LSET/HSET built from such a cell
+/// stores the prefix as the WHOLE value, silently cutting the tail. The flag
+/// rides beside the cells (`item_truncated` / `value_truncated`) so a write
+/// can refuse those rows the way the string type's own `truncated` does.
+fn child_cell_capped(val: &redis::Value, max_items: usize, max_bytes: usize) -> (Value, bool) {
     let child = redis_value_to_json(val, "", max_items, max_bytes);
+    let cut = child
+        .get("truncated")
+        .and_then(|t| t.as_bool())
+        .unwrap_or(false);
     match child.get("value") {
-        Some(v) => v.clone(),
-        None => child,
+        Some(v) => (v.clone(), cut),
+        None => (child, cut),
     }
 }
 
 /// Flat collection shape (`{"type": t, "value": [...], "len", "truncated"}`)
 /// for item lists with no pair structure: list/set replies and RESP3 sets.
+/// When any cell's text was cut by `max_bytes`, a parallel `item_truncated`
+/// boolean array (1:1 with `value`) names them — absent when none are, which
+/// is the common case and keeps the payload unchanged.
 fn items_shape(arr: &[redis::Value], type_name: &str, max_items: usize, max_bytes: usize) -> Value {
     let len = arr.len();
     let truncated = len > max_items;
-    let items: Vec<Value> = arr
-        .iter()
-        .take(max_items)
-        .map(|v| child_cell(v, max_items, max_bytes))
-        .collect();
-    json!({"type": type_name, "value": items, "len": len, "truncated": truncated})
+    let mut items = Vec::with_capacity(len.min(max_items));
+    let mut item_truncated = Vec::new();
+    let mut any_cut = false;
+    for v in arr.iter().take(max_items) {
+        let (cell, cut) = child_cell_capped(v, max_items, max_bytes);
+        items.push(cell);
+        item_truncated.push(json!(cut));
+        any_cut = any_cut || cut;
+    }
+    let mut out = json!({"type": type_name, "value": items, "len": len, "truncated": truncated});
+    if any_cut {
+        out["item_truncated"] = json!(item_truncated);
+    }
+    out
 }
 
 /// A double for JSON. serde_json has no spelling for the non-finite values —
@@ -483,14 +508,22 @@ pub fn redis_value_to_json(
             match inferred_type {
                 "hash" => {
                     let mut entries = Vec::with_capacity(shown_len / 2 + 1);
+                    let mut value_truncated = Vec::new();
+                    let mut any_cut = false;
                     for chunk in arr[..shown_len].chunks(2) {
                         if chunk.len() == 2 {
                             let key = key_display(&chunk[0]);
-                            let value = child_cell(&chunk[1], max_items, max_bytes);
+                            let (value, cut) = child_cell_capped(&chunk[1], max_items, max_bytes);
                             entries.push(json!([key, value]));
+                            value_truncated.push(json!(cut));
+                            any_cut = any_cut || cut;
                         }
                     }
-                    json!({"type": "hash", "entries": entries, "len": len / 2, "truncated": truncated})
+                    let mut out = json!({"type": "hash", "entries": entries, "len": len / 2, "truncated": truncated});
+                    if any_cut {
+                        out["value_truncated"] = json!(value_truncated);
+                    }
+                    out
                 }
                 "zset" => {
                     let mut items = Vec::with_capacity(shown_len / 2 + 1);
@@ -1263,5 +1296,60 @@ mod tests {
         }
         parsed.push(current);
         assert_eq!(parsed, toks);
+    }
+
+    #[test]
+    fn items_past_max_bytes_carry_item_truncated_flags() {
+        // A list element past `max_bytes` arrives as its first N bytes. The
+        // LINDEX verification a grid edit runs is capped by the SAME limit, so
+        // probe and cell compare equal and an LSET built from the cell stored
+        // the prefix as the WHOLE value — the tail was cut with no trace. The
+        // parallel `item_truncated` array is what the Lua write guards refuse
+        // on; absent when nothing was cut (the common case, unchanged payload).
+        let long = "x".repeat(200);
+        let shape = items_shape(
+            &[redis::Value::BulkString(long.clone().into_bytes())],
+            "list",
+            1000,
+            64,
+        );
+        assert_eq!(shape["value"][0], json!(long[..64]));
+        assert_eq!(shape["item_truncated"], json!([true]));
+
+        // Nothing cut: the flag stays absent, so today's consumers see the
+        // same shape as before.
+        let clean = items_shape(
+            &[redis::Value::BulkString(b"short".to_vec())],
+            "list",
+            1000,
+            64,
+        );
+        assert!(clean.get("item_truncated").is_none());
+
+        // Hash values flag through `value_truncated`, 1:1 with `entries`.
+        let hash = redis_value_to_json(
+            &redis::Value::Array(vec![
+                redis::Value::BulkString(b"f".to_vec()),
+                redis::Value::BulkString(vec![b'y'; 100]),
+            ]),
+            "HGETALL",
+            1000,
+            64,
+        );
+        assert_eq!(hash["entries"][0][1], json!("y".repeat(64)));
+        assert_eq!(hash["value_truncated"], json!([true]));
+
+        // A key (field name) is never cut, only values are.
+        let hash_ok = redis_value_to_json(
+            &redis::Value::Array(vec![
+                redis::Value::BulkString(vec![b'k'; 100]),
+                redis::Value::BulkString(b"v".to_vec()),
+            ]),
+            "HGETALL",
+            1000,
+            64,
+        );
+        assert_eq!(hash_ok["entries"][0][0], json!("k".repeat(100)));
+        assert!(hash_ok.get("value_truncated").is_none());
     }
 }

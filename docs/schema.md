@@ -186,7 +186,13 @@ db state persists, and Lua steers it with its own tracked `SELECT` request (a
 failed `SELECT` errors the command behind it rather than running it on the old
 database — including after a reconnect, whose restore is bounded and whose
 failure is reported instead of retried on db 0). Array/map replies are capped
-by `--max-items`/`--max-bytes` (excess marked truncated).
+by `--max-items`/`--max-bytes` (excess marked truncated). A list/set element or
+hash value whose TEXT was cut by `--max-bytes` is additionally named by a
+parallel `item_truncated` / `value_truncated` boolean array (1:1 with the
+cells, present only when at least one was cut): both sides of a grid-edit's
+verification probe are capped identically, so a write built from such a cell
+would store the prefix as the whole value — the flag is what a write refuses
+on.
 
 ### `mq-exec` — one-shot pre-decoded AMQP operations (poste-mq)
 
