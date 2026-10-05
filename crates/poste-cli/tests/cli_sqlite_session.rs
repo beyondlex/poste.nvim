@@ -123,6 +123,23 @@ fn sqlite_session_survives_a_bad_statement() {
     );
     assert_eq!(wait_result(&rx, seq)["status"], "ok");
 
+    // A blank SQL request still answers its own seq: the historical silence
+    // desynced any client pairing responses to seqs (poste-db had to refuse
+    // blank SQL before the wire so its pending map would not leak an entry).
+    seq += 1;
+    write_req(&mut stdin, &serde_json::json!({"seq": seq, "sql": "   "}));
+    let ev = wait_result(&rx, seq);
+    assert_eq!(ev["status"], "error");
+    assert_eq!(ev["error"], "Empty statement");
+
+    // …and the loop keeps serving after it.
+    seq += 1;
+    write_req(
+        &mut stdin,
+        &serde_json::json!({"seq": seq, "sql": "SELECT COUNT(*) FROM t"}),
+    );
+    assert_eq!(wait_result(&rx, seq)["status"], "ok");
+
     drop(stdin);
     while rx.recv().is_ok() {}
     let status = child.wait().unwrap();

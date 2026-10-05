@@ -95,7 +95,12 @@ async fn session_sqlite(connection_url: &str, timeout_secs: u64, max_rows: u64) 
     while let Some(line) = lines.next_line().await? {
         let (seq, sql) = match parse_request(&line) {
             Request::Run(seq, sql) => (seq, sql),
-            Request::Blank => continue,
+            Request::Blank(seq) => {
+                let err =
+                    json!({"type":"result","seq":seq,"status":"error","error":"Empty statement"});
+                emit(&mut stdout, &err).await?;
+                continue;
+            }
             Request::Malformed(msg) => {
                 let err = json!({"type":"result","seq":0,"status":"error","error":msg});
                 emit(&mut stdout, &err).await?;
@@ -140,7 +145,12 @@ async fn session_postgres(connection_url: &str, timeout_secs: u64, max_rows: u64
     while let Some(line) = lines.next_line().await? {
         let (seq, sql) = match parse_request(&line) {
             Request::Run(seq, sql) => (seq, sql),
-            Request::Blank => continue,
+            Request::Blank(seq) => {
+                let err =
+                    json!({"type":"result","seq":seq,"status":"error","error":"Empty statement"});
+                emit(&mut stdout, &err).await?;
+                continue;
+            }
             Request::Malformed(msg) => {
                 let err = json!({"type":"result","seq":0,"status":"error","error":msg});
                 emit(&mut stdout, &err).await?;
@@ -191,7 +201,12 @@ async fn session_mysql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
     while let Some(line) = lines.next_line().await? {
         let (seq, sql) = match parse_request(&line) {
             Request::Run(seq, sql) => (seq, sql),
-            Request::Blank => continue,
+            Request::Blank(seq) => {
+                let err =
+                    json!({"type":"result","seq":seq,"status":"error","error":"Empty statement"});
+                emit(&mut stdout, &err).await?;
+                continue;
+            }
             Request::Malformed(msg) => {
                 let err = json!({"type":"result","seq":0,"status":"error","error":msg});
                 emit(&mut stdout, &err).await?;
@@ -232,7 +247,12 @@ async fn session_mssql(connection_url: &str, timeout_secs: u64, max_rows: u64) -
     while let Some(line) = lines.next_line().await? {
         let (seq, sql) = match parse_request(&line) {
             Request::Run(seq, sql) => (seq, sql),
-            Request::Blank => continue,
+            Request::Blank(seq) => {
+                let err =
+                    json!({"type":"result","seq":seq,"status":"error","error":"Empty statement"});
+                emit(&mut stdout, &err).await?;
+                continue;
+            }
             Request::Malformed(msg) => {
                 let err = json!({"type":"result","seq":0,"status":"error","error":msg});
                 emit(&mut stdout, &err).await?;
@@ -296,7 +316,12 @@ async fn session_clickhouse(connection_url: &str, timeout_secs: u64, max_rows: u
     while let Some(line) = lines.next_line().await? {
         let (seq, sql) = match parse_request(&line) {
             Request::Run(seq, sql) => (seq, sql),
-            Request::Blank => continue,
+            Request::Blank(seq) => {
+                let err =
+                    json!({"type":"result","seq":seq,"status":"error","error":"Empty statement"});
+                emit(&mut stdout, &err).await?;
+                continue;
+            }
             Request::Malformed(msg) => {
                 let err = json!({"type":"result","seq":0,"status":"error","error":msg});
                 emit(&mut stdout, &err).await?;
@@ -347,8 +372,12 @@ async fn session_clickhouse(connection_url: &str, timeout_secs: u64, max_rows: u
 enum Request {
     /// Serve this (seq, sql).
     Run(u64, String),
-    /// Blank SQL: silently skipped, like the pre-consolidation loop.
-    Blank,
+    /// Blank SQL: answered with a seq-bearing error event so every request
+    /// gets exactly one response. The historical loop skipped it silently,
+    /// which desynced any client that pairs responses to the seq it sent —
+    /// poste-db's executor.lua had to refuse blank SQL before the wire to
+    /// keep its pending map from leaking an entry (and a hung caller).
+    Blank(u64),
     /// Malformed JSON: a seq-0 error event answers it and the loop continues.
     Malformed(String),
 }
@@ -371,7 +400,7 @@ fn parse_request(line: &str) -> Request {
         .trim()
         .to_string();
     if sql.is_empty() {
-        return Request::Blank;
+        return Request::Blank(seq);
     }
     Request::Run(seq, sql)
 }
