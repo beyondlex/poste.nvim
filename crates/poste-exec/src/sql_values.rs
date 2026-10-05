@@ -18,7 +18,17 @@ pub fn sqlite_value_to_json(row: &sqlx::sqlite::SqliteRow, idx: usize, _col_type
     }
 
     if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
-        return json!(v);
+        // SQLite INTEGER is 64-bit: past 2^53 a JSON number silently rounds
+        // in the Lua decoder (the grid shows — and a commit writes back — a
+        // wrong value), so wide integers travel as strings. The same rule
+        // the pg and mysql converters apply to their BIGINT columns, and the
+        // rule the poste-db bigint spec pins ("bigints above 2^53 arrive as
+        // JSON strings").
+        let max_safe: i64 = 9_007_199_254_740_992;
+        if v > -max_safe && v < max_safe {
+            return json!(v);
+        }
+        return json!(v.to_string());
     }
     if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
         return float_json(v);
@@ -297,8 +307,38 @@ pub fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col_type: &s
 
 #[cfg(test)]
 mod tests {
-    use super::{float_json, mysql_binary_to_hex, opt_float_json};
+    use super::{float_json, mysql_binary_to_hex, opt_float_json, sqlite_value_to_json};
     use serde_json::{json, Value};
+
+    #[tokio::test]
+    async fn sqlite_wide_integers_travel_as_strings() {
+        // SQLite INTEGER is 64-bit and the converter shipped every cell as a
+        // JSON number: a snowflake ID past 2^53 rounded silently in the Lua
+        // decoder, so the grid displayed — and a commit wrote back — a wrong
+        // value. The pg/mysql BIGINT arms already had this guard; sqlite is
+        // now on the same rule.
+        let pool: sqlx::Pool<sqlx::Sqlite> = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let row = sqlx::query(
+            "SELECT 9223372036854775807 AS big, -9223372036854775808 AS small, 42 AS small_ok",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            sqlite_value_to_json(&row, 0, "INTEGER"),
+            json!("9223372036854775807")
+        );
+        assert_eq!(
+            sqlite_value_to_json(&row, 1, "INTEGER"),
+            json!("-9223372036854775808")
+        );
+        assert_eq!(sqlite_value_to_json(&row, 2, "INTEGER"), json!(42));
+        pool.close().await;
+    }
 
     #[test]
     fn binary_to_hex_matches_mysql_hex() {
