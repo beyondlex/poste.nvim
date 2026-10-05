@@ -154,7 +154,12 @@ poste session --connection URL [--database NAME] [--timeout S] [--max-rows N]
 stdin/stdout NDJSON loop. Request: `{"seq": <u64>, "sql": "<string>"}`.
 Events: progress / `{"type":"result","seq":N,"status":"ok|error",...}`
 (same resultset shape as `exec-file`; session events carry no `total`
-key and error events report real elapsed). Both transports share ONE
+key and error events report real elapsed). The loop is total — every
+request line gets exactly one response: malformed JSON answers a seq-0
+error event, and a blank/whitespace-only `sql` answers its own seq with
+`{"status":"error","error":"Empty statement"}` instead of the historical
+silence (a skipped seq desynced clients that pair responses to what they
+sent). Both transports share ONE
 implementation of statement classification, truncation and value
 conversion (`poste-exec::sql_exec_common` / `sql_values`) — the old
 "session is the live value converter, exec-file must stay in sync"
