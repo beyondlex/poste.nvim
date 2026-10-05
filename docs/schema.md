@@ -133,7 +133,11 @@ for SELECTs a `resultset` (`columns[].name`, `rows` as arrays, `row_count`,
 `total_rows`). A zero-row SELECT still names its `columns` (recovered via a
 describe; a DML statement carries `columns: []`). A leading UTF-8 BOM is
 stripped before splitting. MySQL `BINARY`/`BLOB` values are emitted as
-uppercase hex strings. The echoed `sql` is the statement text after
+uppercase hex strings. Integer cells whose magnitude reaches 2^53 travel as
+their exact-digit STRING (a JSON number rounds silently in the Lua decoder);
+this is uniform across dialects — sqlite INTEGER, pg `INT8`/`BIGINT` and
+mysql `BIGINT` all apply the same max-safe rule, and `BIGINT UNSIGNED`
+always travels as a string. The echoed `sql` is the statement text after
 splitting: a `--` line comment's text is dropped (its newline survives as a
 token separator), a `/* */` comment survives verbatim — pinned by
 `test_split_comment_text_contract`.
