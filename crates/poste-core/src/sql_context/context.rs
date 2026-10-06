@@ -19,6 +19,21 @@ pub fn detect_context_with_dialect(
     offset: usize,
     dialect: SqlDialect,
 ) -> Option<ContextResult> {
+    // The offset crosses the wire as a bare usize (the `context detect` CLI
+    // arg), so a buggy caller can land it mid-UTF-8. The whitespace
+    // look-back below slices `&sql[..offset]`, and a non-boundary slice
+    // panics the whole subcommand — floor a mid-char offset to its starting
+    // char boundary. Offsets past the end stay untouched: find_token_at_offset
+    // already answers None for them (→ Keyword), and the look-back's own
+    // `offset <= sql.len()` guard keeps its slice in bounds.
+    let offset = if offset <= sql.len() && !sql.is_char_boundary(offset) {
+        (0..offset)
+            .rev()
+            .find(|&i| sql.is_char_boundary(i))
+            .unwrap_or(0)
+    } else {
+        offset
+    };
     let tokens = tokenize_with(sql, escapes_for(dialect));
     if tokens.is_empty() {
         return Some(ContextResult {

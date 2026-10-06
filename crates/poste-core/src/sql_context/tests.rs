@@ -2306,3 +2306,51 @@ fn test_references_clause_completes_a_table() {
     assert_eq!(result.context_type, ContextType::Table);
     assert_eq!(result.prefix, "users");
 }
+
+// ---- Hostile offsets (wire hardening) ----
+
+#[test]
+fn test_detect_context_never_panics_on_a_mid_char_offset() {
+    // The `context detect` CLI takes the cursor offset as a bare usize from
+    // the wire, so a buggy caller can land it mid-UTF-8: the whitespace
+    // look-back slices `&sql[..offset]`, and a non-boundary slice panicked
+    // the whole subcommand (byte 8 of "SELECT 你好" is inside 你).
+    let sql = "SELECT 你好";
+    for off in 0..=sql.len() {
+        let result = std::panic::catch_unwind(|| detect_context(sql, off));
+        assert!(result.is_ok(), "panicked at offset {off}");
+    }
+    // a wide space and an NBSP between tokens get the same sweep
+    for sql in ["FROM\u{00A0}t WHERE x", "FROM\u{3000}t WHERE x"] {
+        for off in 0..=sql.len() {
+            let result = std::panic::catch_unwind(|| detect_context(sql, off));
+            assert!(result.is_ok(), "panicked at offset {off} in {sql:?}");
+        }
+    }
+}
+
+#[test]
+fn test_detect_context_survives_hostile_text() {
+    // Empty, quote/comma/dollar soup, NUL and DEL bytes, lone emoji: every
+    // offset must answer without panicking.
+    let cases = [
+        "",
+        "'''",
+        "$$$",
+        "--",
+        "/*",
+        "*/",
+        "\"\"\"",
+        ",",
+        "::",
+        "SELECT \u{0} FROM \u{7f}",
+        "🦀🦀🦀",
+        "SELECT * FROM t WHERE x = ",
+    ];
+    for sql in cases {
+        for off in [0, sql.len() / 2, sql.len()] {
+            let result = std::panic::catch_unwind(|| detect_context(sql, off));
+            assert!(result.is_ok(), "panicked on {sql:?} at offset {off}");
+        }
+    }
+}
