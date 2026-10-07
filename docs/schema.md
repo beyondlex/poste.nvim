@@ -114,7 +114,9 @@ home per side, named below, and are mirrors of each other too:
    handlers call). Nothing trailing a statement counts — a `-- @connection …`
    after a `;` would otherwise steer which database the file runs against
    while staying inside the SQL body, and a `'-- @connection …'` inside a
-   string literal would suppress the header the AI actions write.
+   string literal would suppress the header the AI actions write. A leading
+   UTF-8 BOM is dropped before the match on both sides (a BOM-writing editor
+   glues U+FEFF to line 1, and it is not `\s`); only line 1 can carry one.
 
 ## Subcommands
 
