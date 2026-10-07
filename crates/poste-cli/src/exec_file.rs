@@ -180,7 +180,12 @@ fn extract_connection_directive(content: &str) -> Option<String> {
     // removed from the SQL body, so an unanchored pattern let a comment
     // trailing a statement (`SELECT 1; -- @connection postgres://…`) steer
     // which database the file ran against while staying in the statements.
+    // A leading BOM is dropped first, the way `strip_directives` drops it
+    // before its own directive match — otherwise a file saved by a
+    // BOM-writing editor carried a valid directive the regex could not see
+    // (U+FEFF is not `\s`) and failed with "No connection specified".
     let re = regex::Regex::new(r"^\s*--\s*@connection\s+(.+)").ok()?;
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     for line in content.lines() {
         if let Some(caps) = re.captures(line) {
             let val = caps[1].trim().to_string();
@@ -997,6 +1002,26 @@ mod tests {
         assert_eq!(
             extract_connection_directive("   --@connection sqlite:/tmp/y.db\n").as_deref(),
             Some("sqlite:/tmp/y.db")
+        );
+    }
+
+    /// A UTF-8 BOM before the first line must not blind the directive: the
+    /// splitter and `strip_directives` both drop a leading BOM, but this
+    /// matcher read the raw file, so a file saved by a BOM-writing editor
+    /// (Windows notepad, Neovim with 'bomb') failed with "No connection
+    /// specified" despite carrying a valid `-- @connection` line.
+    #[test]
+    fn connection_directive_survives_a_leading_bom() {
+        assert_eq!(
+            extract_connection_directive("\u{feff}-- @connection sqlite:/tmp/bom.db\nSELECT 1;\n")
+                .as_deref(),
+            Some("sqlite:/tmp/bom.db")
+        );
+        // Only the first line can carry it; a mid-file BOM is data, not a
+        // prefix, and the line it glues to is still not a directive line.
+        assert_eq!(
+            extract_connection_directive("SELECT 1;\n\u{feff}-- @connection postgres://mid/db\n"),
+            None
         );
     }
 
