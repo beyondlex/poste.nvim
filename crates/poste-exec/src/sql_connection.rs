@@ -96,6 +96,14 @@ pub struct ConnectionConfig {
     /// Database dialect: "postgres", "mysql", or "sqlite"
     pub dialect: String,
 
+    /// Raw prebuilt URL. Documented in docs/schema.md rule 4: a raw
+    /// `url = "…"` entry bypasses the field-form normalization entirely.
+    /// The Lua resolvers honor this field; the Rust side silently dropped it,
+    /// so `connection test` / exec-file probed `localhost` while the editor
+    /// reached the real host — the mirror drift this field closes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
     /// Host for network databases (postgres/mysql)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
@@ -196,6 +204,14 @@ impl ConnectionConfig {
     /// For SQLite, returns `sqlite:<path>[?mode=rwc]`.
     /// For Postgres/MySQL/MSSQL/ClickHouse, builds the standard URL format.
     pub fn to_url(&self) -> String {
+        // A raw `url` entry bypasses the field-form build entirely (schema.md
+        // rule 4). An empty string is not a URL — the field form takes over,
+        // the same reading Lua's `build_conn_url` applies.
+        if let Some(u) = &self.url {
+            if !u.is_empty() {
+                return u.clone();
+            }
+        }
         match normalize_dialect(&self.dialect) {
             "sqlite" => {
                 let path = self.path.as_deref().unwrap_or(":memory:");
@@ -253,6 +269,10 @@ impl ConnectionConfig {
     ) -> Result<Self> {
         let sub = |s: Option<String>| s.map(|s| substitute_vars(&s, env_vars));
         let mut resolved = self.clone();
+        // url substitutes like every string field (Lua's apply_env resolves
+        // the whole entry before build_conn_url reads it): a raw
+        // `url = "postgres://{{HOST}}/db"` entry must resolve the same way.
+        resolved.url = sub(resolved.url);
         resolved.host = sub(resolved.host);
         resolved.password = sub(resolved.password);
         resolved.user = sub(resolved.user);
@@ -466,6 +486,7 @@ fn connections_from_toml(content: &str) -> Result<HashMap<String, ConnectionConf
             // Missing dialect behaves like postgres, mirroring the Lua
             // resolver's nil-dialect default.
             dialect: string_field("dialect").unwrap_or_else(|| "postgres".to_string()),
+            url: string_field("url"),
             host: string_field("host"),
             port,
             port_raw,
@@ -544,6 +565,7 @@ mod tests {
     #[test]
     fn test_connection_config_postgres_url() {
         let config = ConnectionConfig {
+            url: None,
             dialect: "postgres".to_string(),
             host: Some("localhost".to_string()),
             port: Some(5432),
@@ -562,8 +584,81 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_url_entry_passes_through_verbatim() {
+        // schema.md rule 4: a raw `url = "…"` entry bypasses the field-form
+        // normalization. The Rust side used to drop the field and build
+        // `postgres://localhost:5432/` from the defaults — `connection test`
+        // probed the WRONG SERVER while the editor (which honors the field)
+        // reached the real one. Mirror of Lua build_conn_url's url branch.
+        let config = ConnectionConfig {
+            url: Some("postgres://db.internal:6543/prod".to_string()),
+            dialect: "postgres".to_string(),
+            host: None,
+            port: None,
+            database: None,
+            user: None,
+            password: None,
+            path: None,
+            ssl_mode: None,
+            port_raw: None,
+            extra_params: HashMap::new(),
+        };
+        assert_eq!(config.to_url(), "postgres://db.internal:6543/prod");
+    }
+
+    #[test]
+    fn test_empty_url_entry_falls_back_to_field_form() {
+        // an empty url is not a URL — the field form takes over, the same
+        // reading Lua's `conn.url ~= ""` applies
+        let config = ConnectionConfig {
+            url: Some(String::new()),
+            dialect: "postgres".to_string(),
+            host: Some("h".to_string()),
+            port: None,
+            database: None,
+            user: None,
+            password: None,
+            path: None,
+            ssl_mode: None,
+            port_raw: None,
+            extra_params: HashMap::new(),
+        };
+        assert_eq!(config.to_url(), "postgres://h:5432/");
+    }
+
+    #[test]
+    fn test_raw_url_entry_expands_vars() {
+        let mut vars = HashMap::new();
+        vars.insert("PGHOST".to_string(), "db.internal".to_string());
+        let config = ConnectionConfig {
+            url: Some("postgres://{{PGHOST}}/prod".to_string()),
+            dialect: "postgres".to_string(),
+            host: None,
+            port: None,
+            database: None,
+            user: None,
+            password: None,
+            path: None,
+            ssl_mode: None,
+            port_raw: None,
+            extra_params: HashMap::new(),
+        };
+        let resolved = config.with_vars_resolved("u", &vars).unwrap();
+        assert_eq!(resolved.to_url(), "postgres://db.internal/prod");
+    }
+
+    #[test]
+    fn test_toml_store_keeps_raw_url_entries() {
+        let content = "\n[prod]\nurl = \"postgres://db.internal:6543/prod\"\n";
+        let store = ConnectionStore::for_test(connections_from_toml(content).unwrap());
+        let url = store.resolve("prod", &HashMap::new()).unwrap();
+        assert_eq!(url, "postgres://db.internal:6543/prod");
+    }
+
+    #[test]
     fn test_connection_config_url_encodes_special_chars() {
         let config = ConnectionConfig {
+            url: None,
             dialect: "postgres".to_string(),
             host: Some("localhost".to_string()),
             port: Some(5432),
@@ -584,6 +679,7 @@ mod tests {
     #[test]
     fn test_connection_config_url_encodes_user() {
         let config = ConnectionConfig {
+            url: None,
             dialect: "postgres".to_string(),
             host: Some("localhost".to_string()),
             port: Some(5432),
@@ -604,6 +700,7 @@ mod tests {
     #[test]
     fn test_connection_config_postgres_default_port() {
         let config = ConnectionConfig {
+            url: None,
             dialect: "postgres".to_string(),
             host: Some("db.example.com".to_string()),
             port: None,
@@ -621,6 +718,7 @@ mod tests {
     #[test]
     fn test_connection_config_mysql_url() {
         let config = ConnectionConfig {
+            url: None,
             dialect: "mysql".to_string(),
             host: Some("127.0.0.1".to_string()),
             port: Some(3306),
@@ -641,6 +739,7 @@ mod tests {
     #[test]
     fn test_connection_config_sqlite_url() {
         let config = ConnectionConfig {
+            url: None,
             dialect: "sqlite".to_string(),
             host: None,
             port: None,
@@ -658,6 +757,7 @@ mod tests {
     #[test]
     fn test_connection_config_sqlite_memory() {
         let config = ConnectionConfig {
+            url: None,
             dialect: "sqlite".to_string(),
             host: None,
             port: None,
@@ -700,6 +800,7 @@ mod tests {
         connections.insert(
             "dev-pg".to_string(),
             ConnectionConfig {
+                url: None,
                 dialect: "postgres".to_string(),
                 host: Some("{{db_host}}".to_string()),
                 port: Some(5432),
@@ -757,6 +858,7 @@ mod tests {
         connections.insert(
             "dev-pg".to_string(),
             ConnectionConfig {
+                url: None,
                 dialect: "postgres".to_string(),
                 host: Some("localhost".to_string()),
                 port: Some(5432),
@@ -772,6 +874,7 @@ mod tests {
         connections.insert(
             "local-sqlite".to_string(),
             ConnectionConfig {
+                url: None,
                 dialect: "sqlite".to_string(),
                 host: None,
                 port: None,
@@ -868,6 +971,7 @@ mod tests {
         // mirror parity with Lua DIALECT_ALIASES: an alias must build the
         // base-dialect URL, never the silent empty-URL fallback
         let mut config = ConnectionConfig {
+            url: None,
             dialect: "postgresql".to_string(),
             host: Some("localhost".to_string()),
             port: None,
@@ -892,6 +996,7 @@ mod tests {
     #[test]
     fn test_to_url_sqlite_keeps_existing_query_string() {
         let mut config = ConnectionConfig {
+            url: None,
             dialect: "sqlite".to_string(),
             host: None,
             port: None,
@@ -915,6 +1020,7 @@ mod tests {
     #[test]
     fn test_to_url_percent_encodes_database() {
         let config = ConnectionConfig {
+            url: None,
             dialect: "postgres".to_string(),
             host: Some("localhost".to_string()),
             port: None,
@@ -932,6 +1038,7 @@ mod tests {
     #[test]
     fn test_to_url_brackets_ipv6_hosts() {
         let with_host = |host: &str| ConnectionConfig {
+            url: None,
             dialect: "postgres".to_string(),
             host: Some(host.to_string()),
             port: Some(5432),
