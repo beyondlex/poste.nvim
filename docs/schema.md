@@ -127,9 +127,13 @@ poste exec-file <file> [--connection URL] [--database NAME] [--env NAME]
                 [--mode transaction|greedy] [--timeout S] [--max-rows N] [--json]
 ```
 
-Parses the `.sql` file itself (`###` section markers; `-- @connection <URL>`
-and `-- @database <name>` lines follow rule 6 and are read and stripped here,
-not left to the editor). `--json` streams NDJSON progress/result events on
+Parses the `.sql` file itself (`-- @connection <URL>` and
+`-- @database <name>` lines follow rule 6 and are read and stripped here,
+not left to the editor; `###` section markers — bare or NAMED
+(`### users by signup`, the shape the editor writes) — are stripped from
+the statement stream by the same literal-aware, top-level-only pass
+(`strip_directives_and_sections`; the Lua editor matches any `^%s*###`
+line, `SECTION_MARKER_PATTERN` — one reading, both resolvers). `--json` streams NDJSON progress/result events on
 stdout; per-statement objects carry `seq`, `sql`, `status`, `latency_ms`, and
 for SELECTs a `resultset` (`columns[].name`, `rows` as arrays, `row_count`,
 `total_rows`). A zero-row SELECT still names its `columns` (recovered via a
