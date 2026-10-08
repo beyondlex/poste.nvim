@@ -23,14 +23,40 @@ pub fn strip_directives(body: &str) -> String {
     let directive_re = DIRECTIVE_RE.get_or_init(|| {
         Regex::new(r"^\s*--\s*@\w+").expect("valid literal regex: directive comment")
     });
-    // A BOM would also blind the directive regex: `\u{FEFF}-- @connection x`
-    // is not `^\s*--` (`\s` does not match U+FEFF), so the connection line
-    // was not recognized.
+    strip_top_level_lines(body, |line| directive_re.is_match(line))
+}
+
+/// [`strip_directives`], plus: drop `###` section-marker lines — bare or
+/// NAMED (`### users by signup`) — at top level only. The exec-file entry
+/// filtered `line.trim() == "###"` locally, so a named marker rode into the
+/// next statement and the server rejected the whole statement ("unrecognized
+/// token: #"): every file written with named sections failed on the CLI,
+/// while the editor (which reads any `^%s*###` line as a marker,
+/// `SECTION_MARKER_PATTERN`) executed the same file fine. One reading, both
+/// resolvers.
+pub fn strip_directives_and_sections(body: &str) -> String {
+    static DIRECTIVE_RE: OnceLock<Regex> = OnceLock::new();
+    static SECTION_RE: OnceLock<Regex> = OnceLock::new();
+    let directive_re = DIRECTIVE_RE.get_or_init(|| {
+        Regex::new(r"^\s*--\s*@\w+").expect("valid literal regex: directive comment")
+    });
+    let section_re = SECTION_RE
+        .get_or_init(|| Regex::new(r"^\s*###").expect("valid literal regex: section marker"));
+    strip_top_level_lines(body, |line| {
+        directive_re.is_match(line) || section_re.is_match(line)
+    })
+}
+
+/// Drop every TOP-LEVEL line `drop` accepts, keeping literal-interior lines
+/// (a `### …` inside a multi-line string is data, not a marker). A BOM is
+/// stripped first: `\u{FEFF}` is not `\s`, so the first line's check would
+/// otherwise be blinded (same rule as the directive match).
+fn strip_top_level_lines(body: &str, drop: impl Fn(&str) -> bool) -> String {
     let body = strip_bom(body);
     let top_level = top_level_line_starts(body);
     body.lines()
         .zip(top_level)
-        .filter(|(line, top)| !top || !directive_re.is_match(line))
+        .filter(|(line, top)| !top || !drop(line))
         .map(|(line, _)| line)
         .collect::<Vec<_>>()
         .join("\n")
@@ -648,6 +674,45 @@ mod tests {
             strip_directives("-- email@example.com is not a directive\nSELECT 1"),
             "-- email@example.com is not a directive\nSELECT 1"
         );
+    }
+
+    #[test]
+    fn test_strip_directives_and_sections_drops_named_markers() {
+        // the shape the editor writes: a named section header must leave the
+        // file, not ride into the next statement ("unrecognized token: #")
+        assert_eq!(
+            strip_directives_and_sections("### users by signup\nSELECT 1"),
+            "SELECT 1"
+        );
+        // the bare marker keeps stripping (the old local filter's contract)
+        assert_eq!(strip_directives_and_sections("###\nSELECT 1"), "SELECT 1");
+        // indented and comment lines are unaffected
+        assert_eq!(
+            strip_directives_and_sections("-- ### not a marker\nSELECT 1"),
+            "-- ### not a marker\nSELECT 1"
+        );
+        // directives still strip alongside markers
+        assert_eq!(
+            strip_directives_and_sections("-- @connection sqlite::memory:\n### s\nSELECT 1"),
+            "SELECT 1"
+        );
+    }
+
+    #[test]
+    fn test_strip_directives_and_sections_keeps_marker_inside_literal() {
+        // a `### …` line inside a multi-line string is DATA
+        assert_eq!(
+            strip_directives_and_sections("SELECT 'a\n### not a marker\nb' AS v"),
+            "SELECT 'a\n### not a marker\nb' AS v"
+        );
+    }
+
+    #[test]
+    fn test_strip_directives_and_sections_strips_bom_before_marker() {
+        // a BOM-writing editor glues U+FEFF to line 1; the marker on line 1
+        // must still be read (Lua strips the BOM before the same match)
+        let body = "\u{feff}### section\nSELECT 1";
+        assert_eq!(strip_directives_and_sections(body), "SELECT 1");
     }
 
     #[test]

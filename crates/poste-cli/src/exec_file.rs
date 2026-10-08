@@ -233,16 +233,13 @@ fn extract_database_from_url(url: &str) -> Option<String> {
 }
 
 fn strip_sql_directives(content: &str) -> String {
-    // the literal-aware directive strip lives in poste-core (one
-    // implementation for the exec-file and request paths — the duplicated
-    // line-based copy here deleted directive-lookalike lines from inside
-    // multi-line string literals); the `###` separator filter stays local
-    // to this entry point
-    poste_core::sql_parser::strip_directives(content)
-        .lines()
-        .filter(|line| line.trim() != "###")
-        .collect::<Vec<_>>()
-        .join("\n")
+    // one implementation in poste-core: the directive strip AND the `###`
+    // section markers, both literal-aware and top-level-only. The `###`
+    // filter used to live here as `line.trim() == "###"` — a bare-only match
+    // with no literal awareness — so a NAMED marker (`### users by signup`,
+    // the shape the editor writes) rode into the next statement and the
+    // server rejected it with "unrecognized token: #".
+    poste_core::sql_parser::strip_directives_and_sections(content)
 }
 
 #[allow(clippy::too_many_arguments)]
